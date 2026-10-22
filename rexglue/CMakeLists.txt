@@ -131,6 +131,7 @@ set(REXGPU_PLUME_SOURCES
     src/plume_renderer/plume_shader_cache.cpp
     src/plume_renderer/plume_swapchain.cpp
     src/plume_renderer/plume_postfx.cpp
+    src/plume_renderer/plume_overlay.cpp
     src/plume_renderer/plume_draw.cpp
     src/plume_renderer/plume_etc2_cache.cpp
     src/plume_renderer/plume_interp.cpp
@@ -296,6 +297,20 @@ rexglue_setup_target(burnout GPU_PLUGINS xenos plume)
 # imgui's include directory to consumers, so a project that uses the app
 # framework has to name it itself.
 target_include_directories(burnout PRIVATE "${REXSDK_DIR}/thirdparty/imgui")
+
+# The achievement notice's font (achievement_toast.cpp), Roboto Medium (Apache
+# 2.0) from imgui's fonts, as bytes in the game: one file on every system.
+set(TOAST_FONT "${REXSDK_DIR}/thirdparty/imgui/misc/fonts/Roboto-Medium.ttf")
+set(TOAST_FONT_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/toast_font.cpp")
+if(NOT EXISTS "${TOAST_FONT_CPP}" OR "${TOAST_FONT}" IS_NEWER_THAN "${TOAST_FONT_CPP}")
+    file(READ "${TOAST_FONT}" toast_font_hex HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," toast_font_bytes "${toast_font_hex}")
+    file(WRITE "${TOAST_FONT_CPP}"
+        "#include <cstddef>\nextern const unsigned char kToastFont[] = {${toast_font_bytes}};\n"
+        "extern const size_t kToastFontSize = sizeof(kToastFont);\n")
+endif()
+target_sources(burnout PRIVATE src/achievement_toast.cpp "${TOAST_FONT_CPP}")
+target_include_directories(burnout PRIVATE "${REXSDK_DIR}/thirdparty/stb")
 
 # plume is built above and linked only into librexgpu-plume.so (see
 # src/plume_renderer/). The host executable never links plume directly.

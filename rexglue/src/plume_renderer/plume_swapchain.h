@@ -5,6 +5,7 @@
 #pragma once
 
 #include "plume_renderer/plume_draw.h"
+#include "plume_renderer/plume_overlay.h"
 #include "plume_renderer/plume_postfx.h"
 
 #include <cstdint>
@@ -216,6 +217,8 @@ class PlumeSwapchain {
   std::unique_ptr<plume::RenderFramebuffer> scene_framebuffer_;
   // Anti-aliasing and sharpening, over the scene target on its way to the window.
   PlumePostFx post_fx_;
+  // The game's notices (an achievement), over the window's image.
+  std::unique_ptr<PlumeOverlay> overlay_;
   // The size the frame is drawn at: the scene target's. The window's, unless
   // XERENGE_RENDER_RESOLUTION asks for another; the frame is then scaled onto
   // the window when it is presented.

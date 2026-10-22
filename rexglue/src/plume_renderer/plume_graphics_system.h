@@ -155,6 +155,14 @@ class PlumeGraphicsSystem final : public system::IGraphicsSystem {
 
   std::unique_ptr<plume::VulkanInterface> render_interface_;
   std::unique_ptr<plume::RenderDevice> render_device_;
+  // The driver's compiled pipelines between runs (plume_vulkan_cache.bin beside
+  // the shader cache): loaded with the shader storage, saved once a minute when
+  // it has grown (the first 15 s in), and at the end.
+  void LoadPipelineCache(const std::filesystem::path& cache_root);
+  void SavePipelineCache(bool now);
+  std::filesystem::path pipeline_cache_path_;
+  size_t pipeline_cache_saved_ = 0;
+  std::chrono::steady_clock::time_point pipeline_cache_checked_;
   std::unique_ptr<PlumeSwapchain> swapchain_;
   std::unique_ptr<PlumeDrawContext> draw_context_;
   std::vector<std::string> device_names_;

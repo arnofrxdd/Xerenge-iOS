@@ -8,6 +8,9 @@
 
 #include "online_lobby.h"
 #include "plume_d3d.h"
+#include "xerenge_settings.h"
+
+void XerengeAchievementToastStart();
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
@@ -86,7 +89,10 @@ class BurnoutApp : public rex::ReXApp {
 #endif
   }
 
+  void OnPreSetup(rex::RuntimeConfig&) override { xerenge::settings::ApplyAtStart(); }
+
   void OnPostSetup() override {
+    XerengeAchievementToastStart();
     xerenge::plume_d3d::InstallPlumeRuntimeHooks();
     XerengeRegisterFrameClock();
     // --online: this copy's lobby is up (and heard on the LAN) from the start,

@@ -170,6 +170,13 @@ class Server {
   Fields GameRecord(const Game& game, const Connection& to) const;
   // Sends the game's record to every player in it, as '+mgm' (their own game).
   void SendGameToPlayers(const Game& game);
+  // A player of another server joined: it has the game now, this server's own
+  // players (the host) only some 250 ms later - the joiner's answer goes the
+  // longer way, and a host that invites before the joiner knows the game is
+  // never joined. EA's servers answered the joiner first too (GitHub #34).
+  void SendGameAfterRemoteJoin(const Game& game, Connection& joiner);
+  void SendHeldGames();
+  std::vector<std::pair<std::chrono::steady_clock::time_point, uint32_t>> held_games_;
   void LeaveGame(Connection& connection);
   Connection* ConnectionFor(SocketHandle fd) const;
   // '+who': the user's own record, sent at login and again whenever the game

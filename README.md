@@ -4,7 +4,7 @@ Native iOS (iPhone & iPad) port of **Burnout Revenge** (Xbox 360, retail): the g
 
 > **Status:** Fully playable at a **rock-solid locked 60 FPS** on iPhone 13 (Apple A15 Bionic) and newer devices, with authentic motion blur, warm sky bloom, 100% glitch-free UI, and controller/touch support.
 
-**Supported releases:** Burnout Revenge (Europe) and, since 0.4.7, Burnout Revenge (USA) - both officially, tested end to end: menus, races, Crash mode, replays, widescreen, and the logo skip. Other dumps (the beta, other regions) are not.
+**Supported releases:** Burnout Revenge (Europe) and Burnout Revenge (USA) - both officially, tested end to end: menus, races, Crash mode, replays, widescreen, and the logo skip. Other dumps (the beta, other regions) are not.
 
 ---
 
@@ -38,7 +38,20 @@ That verifies the image, extracts it, builds the SDK and builds the title. [`SET
 
 ### Shaders
 
-The title's shaders are its own code, so none are kept here: the build translates them from your copy of the game. Most are found by scanning the executable. The rest the title assembles while it runs - a shader from the executable, or from a `graphics/*.obj` file on the disc, with a few vertex-fetch instructions patched to match the vertex layout. Those are rebuilt from the disc by the recipe in `rexglue/tools/runtime_shaders.recipe`, which holds only hashes and patch masks, and each result is checked against its hash. So every shader is there from the first frame, without running the game once to collect them. `rexglue/tools/make_runtime_shader_recipe` (built by `scripts/build-tools.sh`) refreshes the recipe from the shaders a run dumps (`XERENGE_DUMP_UCODE=1`).
+The title's shaders are its own code, so none are kept here: the build translates them from your copy of the game. Most are found by scanning the executable. The rest the title assembles while it runs - a shader from the executable, or from a `graphics/*.obj` file on the disc, with a few vertex-fetch instructions patched to match the vertex layout. Those are rebuilt from the disc by the recipe in `rexglue/tools/runtime_shaders.recipe`, which holds only hashes and patch masks, and each result is checked against its hash. So every shader is there from the first frame, without running the game once to collect them.
+
+---
+
+## Plume
+
+Burnout Revenge draws through **plume**, this project's own GPU plugin ([`rexglue/src/plume_renderer/`](rexglue/src/plume_renderer/)), on top of [ReXGlue](https://github.com/rexglue/rexglue-sdk) through our fork [rexglue-xerenge](https://github.com/arnofrxdd/rexglue-xerenge).
+
+Instead of emulating the Xenos command processor, plume takes the title's Direct3D calls directly and draws with them:
+* **No GPU state caches to keep correct.** A command-processor emulator needs texture and render-target caches kept in step with bindings. Drawing from D3D calls directly lets the host GPU driver handle it.
+* **Shaders are translated ahead of time**, not recompiled at runtime, so there is no JIT warm-up and no stutter when encountering new shaders.
+* **Persistent Pipeline Caching & Pre-warming:** Driver pipelines are saved to `plume_vulkan_cache.bin` and 181 known pipelines are compiled ahead of time during the logo sequence.
+* **Spreads work across threads:** Texture unpacking and geometry preparation are distributed across worker threads.
+* **Runs on Metal via MoltenVK:** Fully hardware accelerated on iOS and macOS.
 
 ---
 
@@ -59,10 +72,10 @@ Install directly over USB or Wi-Fi using `xcrun devicectl`:
 ```bash
 xcrun devicectl device install app --device <DEVICE_UUID> ios/build_test/Release-iphoneos/burnout.app
 ```
-*(Alternatively, deploy via Xcode, AltStore, SideStore, or TrollStore).*
+*(Alternatively, install via AltStore, SideStore, TrollStore, or Sideloadly).*
 
 ### 3. Game Data Directory
-Place your extracted game files (`default.xex` and game asset folders) in the app's `Documents/game/` container on your device.
+Place your extracted game files (`default.xex` and game asset folders) in the app's `Documents/game/` container on your device via the iOS **Files** app (`On My iPhone > Burnout Revenge`).
 
 ---
 
@@ -70,21 +83,30 @@ Place your extracted game files (`default.xex` and game asset folders) in the ap
 
 * **Locked 60 FPS Engine Pacing:**
   * Synchronized to the console's fixed 60 Hz simulation loop (`dt = 1/60s`) and display refresh via `CAMetalLayer`.
-  * Multi-frame `VdSwap` pacing queue headroom eliminates CPU stalls during massive multi-car crashes and explosions.
+  * Proper presentation pacing: regular races pace at 60 FPS (1 vblank); Crash Mode and Crash Cameras accurately pace at 30 FPS (2 vblanks) at authentic 1.0x cinematic speed.
 * **Authentic Motion Blur & Sky Bloom:**
-  * Retains the signature 200 MPH velocity streaks and takedown cinematic motion blur using native per-pixel motion vector targets (`oC1`).
+  * Retains signature 200 MPH velocity streaks and takedown cinematic motion blur using native per-pixel motion vector targets (`oC1`).
   * Authentic multi-pass golden-hour sky bloom and specular car reflections running at less than 0.3 ms GPU overhead.
 * **Apple Silicon TBDR GPU Optimization:**
   * Scene rendered at `1386x640` and cleanly upscaled to native high-DPI OLED screens (e.g. 2532×1170 on iPhone 13).
-  * Color, motion vector, and depth attachments fit 100% within the A15's 32 MB System-Level Cache (SLC), preventing DRAM memory bandwidth bottlenecks and keeping the device cool.
+  * Attachments fit within the A15's 32 MB System-Level Cache (SLC), preventing memory bottlenecks and thermal throttling.
 * **580 MB Unified Memory Slashed:**
-  * Dynamic buffer sizes and draw ring structures are specifically tuned for iOS (`kDummyVertexCount = 1048576`, `kCacheVertexCount = 524288`), ensuring the app stays safely below iOS Jetsam termination limits.
+  * Dynamic buffer sizes and draw ring structures tuned for iOS to remain safely below iOS Jetsam termination limits.
 * **Perceptual Traffic & Reflection LOD:**
-  * Planar drop-shadows for civilian cars beyond 35 meters are perceptually culled, saving 30+ redundant render passes per frame in heavy traffic.
-  * Player vehicle updates 1 dynamic reflection cubemap face per turn, keeping civilian traffic reflections lightweight while keeping the player car dazzling.
+  * Planar drop-shadows for civilian cars beyond 35 meters are perceptually culled, saving 30+ redundant render passes per frame.
+  * Player vehicle updates dynamic reflection cubemaps while civilian traffic reflections remain lightweight.
 * **100% Glitch-Free HUD & Natural FOV:**
   * Tuned mobile camera field-of-view without fisheye distortion.
   * 2D UI quad pass-through preserves razor-sharp text, speedometers, boost flames, and ranking overlays.
+
+---
+
+## Features, Achievements & Online
+
+* **Achievements:** Read from title data and shown dynamically as earned - a notification banner is drawn over the screen without pausing, and the complete achievements list with descriptions is accessible under *Player File > Stats*.
+* **Online Lobby:** `ealobby` stands in for EA's servers with self-hosted support for matchmaking, News, and the Burnout Clips Locker.
+* **Controllers:** Full native support for MFi, PlayStation DualSense, Xbox Wireless, and Backbone One controllers via the iOS GameController framework.
+* **Touch Controls:** On-screen virtual gamepad for mobile touch play.
 
 ---
 
@@ -96,13 +118,7 @@ The Xerenge-iOS project consists of three coordinated repositories:
 | :--- | :--- |
 | **[arnofrxdd/Xerenge-iOS](https://github.com/arnofrxdd/Xerenge-iOS)** | Main title logic, Direct3D draw translation, iOS Xcode project, and build scripts. |
 | **[arnofrxdd/rexglue-xerenge](https://github.com/arnofrxdd/rexglue-xerenge)** | ReXGlue SDK fork carrying iOS runtime support, Apple thread QoS tuning, and MoltenVK patches. |
-| **[arnofrxdd/plume-xerenge](https://github.com/arnofrxdd/plume-xerenge)** | Low-level Plume renderer fork with native Apple device vendor detection and iOS CocoaWindow stubs. |
-
----
-
-## Controls
-* **Game Controllers:** Full native support for MFi, PlayStation DualSense, Xbox Wireless, and Backbone One controllers via iOS GameController framework.
-* **Touch Controls:** On-screen virtual joystick and touch buttons for mobile-only play.
+| **[arnofrxdd/plume-xerenge](https://github.com/arnofrxdd/plume-xerenge)** | Low-level Plume renderer fork with native Apple device vendor detection, pipeline caching, and iOS CocoaWindow stubs. |
 
 ---
 

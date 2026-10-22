@@ -41,6 +41,7 @@
 #include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/registers.h>
 #include <rex/graphics/xenos.h>
+#include <rex/filesystem.h>
 #include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/system/xmemory.h>
@@ -3111,6 +3112,8 @@ plume::RenderPipeline* PlumeDrawContext::GetOrCreatePipeline(
     uint64_t vs_hash, uint64_t ps_hash, plume::RenderPrimitiveTopology topology,
     uint32_t blend_control, uint32_t color_mask, uint32_t depth_control, bool alpha_test,
     bool depth_bias, uint32_t cull) {
+  const PipelineRecord record{vs_hash,   ps_hash,          uint32_t(topology), blend_control, color_mask,
+                              depth_control, cull,           alpha_test,         depth_bias,    BloomOff()};
   // XERENGE_CULL=1: the title's back-face culling, which is otherwise off - see
   // the cull mode below.
   static const bool culling = std::getenv("XERENGE_CULL") != nullptr;
@@ -3263,6 +3266,7 @@ plume::RenderPipeline* PlumeDrawContext::GetOrCreatePipeline(
 
   plume::RenderPipeline* raw = pipeline.get();
   pipelines_.emplace(key, std::move(pipeline));
+  RecordPipeline(record);
   pipeline_layouts_[raw] = layout;
   static uint32_t ok_logs = 0;
   if (ok_logs < 8) {
@@ -7358,6 +7362,10 @@ void PlumeDrawContext::EncodeDraws(plume::RenderCommandList* list,
                                    plume::RenderTexture* colour_target,
                                    const RenderPassBreak* pass) {
   uint32_t resolved_in_place = 0;
+  if (ready_) {
+    WarmPipelines();
+  }
+
   if (!ready_ || !list || draws.empty()) {
     ClearFirstPass(list, pass, 0, 0);
     return;
@@ -9354,5 +9362,86 @@ extern "C" __attribute__((visibility("default"))) int xerenge_prepare_etc2(
   return int(textures);
 }
 #endif
+
+}  // namespace rex::plume_renderer
+
+namespace rex::plume_renderer {
+
+void PlumeDrawContext::SetPipelineList(const std::string& path) {
+  if (pipeline_list_ || path.empty()) {
+    return;
+  }
+  // One pipeline a line: GetOrCreatePipeline's arguments and the bloom setting.
+  // The list that comes with the game (plume_pipelines.txt beside it: what was
+  // met playing it through), then this copy's own, which takes what is met
+  // beyond both - so a first start makes them during the logos, not mid-race.
+  const auto read = [this](const std::string& file) {
+    size_t added = 0;
+    std::FILE* in = std::fopen(file.c_str(), "r");
+    if (!in) {
+      return added;
+    }
+    char line[256];
+    while (std::fgets(line, sizeof(line), in)) {
+      unsigned long long vs = 0, ps = 0;
+      unsigned topology = 0, blend = 0, mask = 0, depth = 0, cull = 0, alpha = 0, bias = 0, bloom = 0;
+      if (std::sscanf(line, "%llx %llx %x %x %x %x %x %x %x %x", &vs, &ps, &topology, &blend, &mask, &depth,
+                      &cull, &alpha, &bias, &bloom) != 10) {
+        continue;
+      }
+      std::string text(line);
+      while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) {
+        text.pop_back();
+      }
+      if (known_pipelines_.insert(text).second) {
+        warm_queue_.push_back({vs, ps, topology, blend, mask, depth, cull, alpha != 0, bias != 0, bloom != 0});
+        ++added;
+      }
+    }
+    std::fclose(in);
+    return added;
+  };
+  const std::string bundled = (rex::filesystem::GetExecutableFolder() / "plume_pipelines.txt").string();
+  const size_t from_game = bundled != path ? read(bundled) : 0;
+  const size_t from_cache = read(path);
+  pipeline_list_ = std::fopen(path.c_str(), "a");
+  REXLOG_INFO("plume: {} pipeline(s) to make ahead - {} from {}, {} more from {}", warm_queue_.size(), from_game,
+              bundled, from_cache, path);
+}
+
+void PlumeDrawContext::RecordPipeline(const PipelineRecord& r) {
+  if (!pipeline_list_ || !recording_pipeline_) {
+    return;
+  }
+  const std::string text =
+      fmt::format("{:016x} {:016x} {:x} {:x} {:x} {:x} {:x} {:x} {:x} {:x}", r.vs_hash, r.ps_hash, r.topology,
+                  r.blend_control, r.color_mask, r.depth_control, r.cull, r.alpha_test ? 1 : 0,
+                  r.depth_bias ? 1 : 0, r.bloom_off ? 1 : 0);
+  if (known_pipelines_.insert(text).second) {
+    std::fprintf(pipeline_list_, "%s\n", text.c_str());
+    std::fflush(pipeline_list_);
+  }
+}
+
+void PlumeDrawContext::WarmPipelines() {
+  if (warm_next_ >= warm_queue_.size()) {
+    return;
+  }
+  // A couple of milliseconds a frame: the logos and the menus make most of them.
+  const auto start = std::chrono::steady_clock::now();
+  const bool bloom_off = BloomOff();
+  while (warm_next_ < warm_queue_.size() &&
+         std::chrono::steady_clock::now() - start < std::chrono::milliseconds(2)) {
+    const PipelineRecord& r = warm_queue_[warm_next_++];
+    if (r.bloom_off != bloom_off) {
+      continue;  // made for the other bloom setting; made as met, if it is switched
+    }
+    GetOrCreatePipeline(r.vs_hash, r.ps_hash, plume::RenderPrimitiveTopology(r.topology), r.blend_control,
+                        r.color_mask, r.depth_control, r.alpha_test, r.depth_bias, r.cull);
+  }
+  if (warm_next_ >= warm_queue_.size()) {
+    REXLOG_INFO("plume: the pipelines met before are all made ({})", warm_queue_.size());
+  }
+}
 
 }  // namespace rex::plume_renderer

@@ -110,6 +110,13 @@ void ShowSettings(uint8_t* base) {
   next ^= 1;
 }
 
+// Another Driver Details screen's movie asked for: Stats's, which the load
+// (settings_movie.cpp) fills with the achievements, and Player File's again,
+// back from them.
+void ShowMovie(uint8_t* base, const char* path) {
+  StoreU32(base, LoadU32(base, kMenuService) + 20, GuestCString(base, path));
+}
+
 // The natives' one argument, as an integer: the top of the interpreter's
 // stack, through the interpreter's own conversion.
 int32_t Argument(PPCContext& ctx, uint8_t* base) {
@@ -208,6 +215,12 @@ constexpr uint32_t kEmptyTitle = 0x82010E58;    // "", the title the game's popu
 constexpr uint32_t kPopupButtons = 4;           // ePopupType_YesNo (Cafe.bin's popup manager): A and B
 bool g_visited_pages = false;                   // our pages were opened since Settings was
 bool g_popup_pending = false;                   // the popup to ask for at the next frame
+int g_achievement_popup = -1;                   // the achievement whose popup to show next
+constexpr uint32_t kPopupOk = 1;                // ePopupType_OK: A alone, "OK"
+constexpr int32_t kAchievementOptions = 0x58100;  // + its row: A on it in the list (settings_movie.cpp)
+
+// The popup's title and text, the keys below give (LocalisedText).
+std::string g_popup_title, g_popup_text;
 
 void RestartAnswer(PPCContext& ctx, uint8_t* base) {
   const uint32_t button = ctx.r3.u32;
@@ -250,10 +263,68 @@ bool ShowRestartPopup(PPCContext& ctx, uint8_t* base) {
   return true;
 }
 
+// An achievement's popup, from the Stats-like list: its name over what it is
+// for (or how to earn it), its score and when it was earned; OK closes it.
+void AchievementAnswer(PPCContext& ctx, uint8_t*) {
+  REXLOG_INFO("menu: achievement popup closed (button {})", ctx.r3.u32);
+}
+
+void ShowAchievementPopup(PPCContext& ctx, uint8_t* base, int index) {
+  const auto rows = settings::AchievementRows();
+  if (index < 0 || size_t(index) >= rows.size()) {
+    return;
+  }
+  const auto& row = rows[size_t(index)];
+  g_popup_title = row.name;
+  g_popup_text = row.description + "\n\n" +
+                 (row.state == "LOCKED" ? row.score + " - LOCKED" : row.score + " - EARNED " + row.state);
+  static uint32_t answer = 0, title = 0, text = 0;
+  if (!answer) {
+    answer = rex::Runtime::instance()->function_dispatcher()->AllocateThunk(&AchievementAnswer, 0);
+    title = GuestCString(base, "$XerengeAchievementTitle");
+    text = GuestCString(base, "$XerengeAchievementText");
+  }
+  if (!answer) {
+    return;
+  }
+  const PPCContext saved = ctx;
+  StoreU32(base, ctx.r1.u32 + 84, 0);
+  StoreU32(base, ctx.r1.u32 + 92, 0);
+  ctx.r3.u64 = LoadU32(base, kPopupService);
+  ctx.r4.u64 = title;
+  ctx.r5.u64 = text;
+  ctx.r6.u64 = kPopupOk;
+  ctx.r7.u64 = answer;
+  ctx.r8.u64 = 0;
+  ctx.r9.u64 = 12;
+  ctx.r10.u64 = 0;
+  REXLOG_INFO("menu: achievement popup for row {} ({})", index, row.name);
+  sub_821E6928(ctx, base);
+  ctx = saved;
+}
+
 }  // namespace
 
 REX_HOOK_RAW(sub_821EC580) {
   const int32_t option = int32_t(ctx.r4.u32);
+  REXLOG_INFO("menu: SelectedOption({:X})", uint32_t(option));
+  // A on an achievement in the list: its popup, at the next frame (below).
+  if (option >= kAchievementOptions && option < kAchievementOptions + 0x100) {
+    g_achievement_popup = option - kAchievementOptions;
+    return;
+  }
+  // The achievements, Player File's button: in Stats's movie; back from them, to
+  // Player File.
+  if (option == kOurOptions + settings::kAchievements) {
+    settings::SetPage(settings::kAchievements);
+    ShowMovie(base, "../Burnout4/Menu/DriverDetails/DriverDetailsStats");
+    return;
+  }
+  if (option == -1 && settings::CurrentPage() == settings::kAchievements) {
+    settings::SetPage(settings::kMain);
+    ShowMovie(base, "../Burnout4/Menu/DriverDetails/DriverDetailsProfile");
+    return;
+  }
   if (option > kOurOptions && option <= kOurOptions + 3) {
     settings::SetPage(settings::Page(option - kOurOptions));
     g_visited_pages = true;
@@ -331,9 +402,32 @@ REX_HOOK_RAW(sub_8210FCF8) {
     const char* text;
   } kTexts[] = {
       {"XerengeRestart", "Some settings take effect after a restart. Restart the game now?"},
+      {"XerengeInfo", "Info"},  // the achievements' list: A opens one's popup
   };
   static uint32_t guest[std::size(kTexts)] = {};
   const char* key = reinterpret_cast<const char*>(xerenge::GuestPointer(base, ctx.r4.u32));
+  // An achievement's popup: its title and text, as they are now, each in a
+  // buffer of its own, written again every time.
+  if (ctx.r4.u32 >= 0x10000) {
+    const bool title = std::strcmp(key, "XerengeAchievementTitle") == 0;
+    if (title || std::strcmp(key, "XerengeAchievementText") == 0) {
+      constexpr size_t kChars = 1024;
+      static uint32_t buffers[2] = {};
+      uint32_t& buffer = buffers[title ? 0 : 1];
+      if (!buffer) {
+        buffer = REX_KERNEL_MEMORY()->SystemHeapAlloc(uint32_t(kChars * 2), 0x10);
+      }
+      const std::string& text = title ? g_popup_title : g_popup_text;
+      uint8_t* out = xerenge::GuestPointer(base, buffer);
+      const size_t length = std::min(text.size(), kChars - 1);
+      for (size_t c = 0; c <= length; ++c) {
+        out[c * 2] = 0;
+        out[c * 2 + 1] = c < length ? uint8_t(text[c]) : 0;
+      }
+      ctx.r3.u64 = buffer;
+      return;
+    }
+  }
   for (size_t i = 0; ctx.r4.u32 >= 0x10000 && i < std::size(kTexts); ++i) {
     if (std::strcmp(key, kTexts[i].key) == 0) {
       if (!guest[i]) {
@@ -368,6 +462,11 @@ REX_HOOK_RAW(sub_821FF308) {
   if (g_popup_pending) {
     g_popup_pending = false;
     ShowRestartPopup(ctx, base);
+  }
+  if (g_achievement_popup >= 0) {
+    const int index = g_achievement_popup;
+    g_achievement_popup = -1;
+    ShowAchievementPopup(ctx, base, index);
   }
   __imp__sub_821FF308(ctx, base);
 }

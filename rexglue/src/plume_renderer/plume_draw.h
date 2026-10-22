@@ -8,6 +8,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <cstdint>
 #include <map>
@@ -503,6 +504,14 @@ class PlumeDrawContext {
   // Pipeline built from the title's own translated shaders, as opposed to the
   // passthrough pair. Guest blend and depth state take part in the key, since
   // they are baked into the pipeline.
+ public:
+  // The pipelines met before (a list beside the shader cache): each new one is
+  // added to it, and the ones in it are made ahead, a few a frame, before they
+  // are drawn with - a pipeline first met mid-race stalled the frame it came in.
+  void SetPipelineList(const std::string& path);
+
+ private:
+
   plume::RenderPipeline* GetOrCreatePipeline(uint64_t vs_hash, uint64_t ps_hash,
                                              plume::RenderPrimitiveTopology topology,
                                              uint32_t blend_control, uint32_t color_mask,
@@ -1024,6 +1033,20 @@ class PlumeDrawContext {
 
   std::unordered_map<PipelineKey, std::unique_ptr<plume::RenderPipeline>, PipelineKeyHash>
       pipelines_;
+  // SetPipelineList: GetOrCreatePipeline's arguments for each pipeline met, as a
+  // line of the list; those still to make ahead; the list, appended to.
+  struct PipelineRecord {
+    uint64_t vs_hash, ps_hash;
+    uint32_t topology, blend_control, color_mask, depth_control, cull;
+    bool alpha_test, depth_bias, bloom_off;
+  };
+  void RecordPipeline(const PipelineRecord& record);
+  void WarmPipelines();
+  std::vector<PipelineRecord> warm_queue_;
+  size_t warm_next_ = 0;
+  std::unordered_set<std::string> known_pipelines_;
+  std::FILE* pipeline_list_ = nullptr;
+  bool recording_pipeline_ = true;
   // The vertex layout each of the title's pipelines reads: the input
   // locations its vertex shader declares (bit n = location n), packed in
   // order. A pipeline not in here reads the full 20-location layout.

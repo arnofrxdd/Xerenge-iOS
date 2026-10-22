@@ -198,6 +198,7 @@ std::vector<std::string> Prepare(const std::filesystem::path& dir, const Config&
   if (conf.Has("power_mode")) Env("XERENGE_POWER_MODE", conf.Get("power_mode"));
   if (conf.Has("spin_lead_ms")) Env("XERENGE_SPIN_LEAD_MS", conf.Get("spin_lead_ms"));
   if (conf.Is("fps_counter", "true")) Env("XERENGE_FPS_SHOW", "1");
+  if (conf.Is("renderdoc", "false")) Env("XERENGE_NO_RENDERDOC", "1");
   if (conf.Is("fps_30", "true")) Env("XERENGE_FPS_30", "1");
   if (conf.Is("frame_generation", "true")) Env("XERENGE_FRAME_GENERATION", "120");
   if (conf.Is("crash_interpolation", "false")) Env("XERENGE_CRASH_INTERPOLATION", "0");

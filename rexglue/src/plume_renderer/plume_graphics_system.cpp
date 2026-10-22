@@ -273,7 +273,9 @@ bool PlumeGraphicsSystem::InitializePlumeDevice() {
   // overlay and F12 captured nothing. The library is only present where
   // RenderDoc is installed, so elsewhere this does nothing.
 #if !REX_PLATFORM_MAC  // no RenderDoc on macOS: the SDK leaves its API type opaque there
-  if (!renderdoc_api_) {
+  // XERENGE_NO_RENDERDOC=1 (Debug > RenderDoc off): not loaded, so no overlay.
+  const char* no_renderdoc = std::getenv("XERENGE_NO_RENDERDOC");
+  if (!renderdoc_api_ && !(no_renderdoc && *no_renderdoc == '1')) {
     renderdoc_api_ = rex::ui::RenderDocAPI::CreateIfConnected();
     if (renderdoc_api_ && renderdoc_api_->api_1_0_0()) {
       // This template overrides renderdoccmd's --capture-file, so run.sh
@@ -2408,6 +2410,7 @@ void PlumeGraphicsSystem::PresentClearColorOnUiThread(uint32_t guest_width,
   }
 #endif
   swapchain_->ClearAndPresent(0.03f, 0.04f, 0.07f, 1.0f, encode, &ctx, resolve, hold);
+  SavePipelineCache(false);
 #if defined(__ANDROID__)
   if (capture_device) {
     const uint32_t ok = renderdoc_api_->api_1_0_0()->EndFrameCapture(capture_device, nullptr);
@@ -2485,10 +2488,77 @@ void PlumeGraphicsSystem::EnableReadPointerWriteBack(uint32_t ptr, uint32_t bloc
   WriteReadPointerWriteback();
 }
 
+void PlumeGraphicsSystem::LoadPipelineCache(const std::filesystem::path& cache_root) {
+  auto* device = static_cast<plume::VulkanDevice*>(render_device_.get());
+  if (!device || cache_root.empty() || !pipeline_cache_path_.empty()) {
+    return;
+  }
+  pipeline_cache_path_ = cache_root / "plume_vulkan_cache.bin";
+  std::vector<uint8_t> data;
+  if (std::FILE* in = std::fopen(pipeline_cache_path_.string().c_str(), "rb")) {
+    std::fseek(in, 0, SEEK_END);
+    const long size = std::ftell(in);
+    std::fseek(in, 0, SEEK_SET);
+    if (size > 0) {
+      data.resize(size_t(size));
+      if (std::fread(data.data(), 1, data.size(), in) != data.size()) {
+        data.clear();
+      }
+    }
+    std::fclose(in);
+  }
+  const bool loaded = device->loadPipelineCache(data.empty() ? nullptr : data.data(), data.size());
+  pipeline_cache_saved_ = data.size();
+  // The first save 15 s in, once the logos have made the listed pipelines.
+  pipeline_cache_checked_ = std::chrono::steady_clock::now() - std::chrono::seconds(45);
+  REXLOG_INFO("plume: driver pipeline cache {} ({} KB from {})", loaded ? "up" : "unavailable", data.size() / 1024,
+              pipeline_cache_path_.string());
+}
+
+void PlumeGraphicsSystem::SavePipelineCache(bool now) {
+  auto* device = static_cast<plume::VulkanDevice*>(render_device_.get());
+  if (!device || pipeline_cache_path_.empty()) {
+    return;
+  }
+  const auto time = std::chrono::steady_clock::now();
+  if (!now && time - pipeline_cache_checked_ < std::chrono::minutes(1)) {
+    return;
+  }
+  pipeline_cache_checked_ = time;
+  std::vector<uint8_t> data = device->pipelineCacheData();
+  if (data.size() <= pipeline_cache_saved_) {
+    return;
+  }
+  pipeline_cache_saved_ = data.size();
+  // Written beside it and renamed over it: a run cut short leaves the old one.
+  const auto write = [path = pipeline_cache_path_, data = std::move(data)] {
+    const std::filesystem::path temp = path.string() + ".new";
+    if (std::FILE* out = std::fopen(temp.string().c_str(), "wb")) {
+      const bool ok = std::fwrite(data.data(), 1, data.size(), out) == data.size();
+      std::fclose(out);
+      std::error_code error;
+      if (ok) {
+        std::filesystem::rename(temp, path, error);
+      }
+      REXLOG_INFO("plume: driver pipeline cache saved ({} KB){}", data.size() / 1024, ok && !error ? "" : " - failed");
+    }
+  };
+  if (now) {
+    write();
+  } else {
+    std::thread(write).detach();
+  }
+}
+
 void PlumeGraphicsSystem::InitializeShaderStorage(const std::filesystem::path& cache_root,
                                                   uint32_t title_id, bool blocking) {
   // The DXT textures re-encoded as ETC2 (a GPU without BC) are kept there.
   Etc2Cache::Instance().SetRoot(cache_root);
+  LoadPipelineCache(cache_root);
+  // The pipelines met in earlier runs, made ahead (PlumeDrawContext::SetPipelineList).
+  if (draw_context_ && !cache_root.empty()) {
+    draw_context_->SetPipelineList((cache_root / "plume_pipelines.txt").string());
+  }
   (void)blocking;
 
   PlumeShaderCache& cache = PlumeShaderCache::Instance();
@@ -4329,6 +4399,7 @@ void PlumeGraphicsSystem::Shutdown() {
     draw_context_.reset();
   }
 
+  SavePipelineCache(true);
   render_device_.reset();
   render_interface_.reset();
   device_names_.clear();

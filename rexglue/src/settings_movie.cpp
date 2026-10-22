@@ -889,6 +889,429 @@ bool Rebuild(const uint8_t* data, size_t data_size, const uint8_t* constants, si
   return true;
 }
 
+// Driver Details > Player File with an ACHIEVEMENTS button above Load Profile: a
+// copy of New Profile's (SmallMenuOption), whose A hands kAchievements to
+// SelectedOption, which opens the Settings movie on that page (xerenge_menu.cpp).
+bool RebuildProfile(const uint8_t* data, size_t data_size, const uint8_t* constants,
+                    size_t constants_size, Blob& out_data, Blob& out_constants) {
+  Constants c;
+  if (!c.Read(constants, constants_size)) {
+    REXLOG_WARN("menu: player file movie: its constants do not read");
+    return false;
+  }
+  Blob& b = out_data;
+  b.bytes.assign(data, data + data_size);
+  const uint32_t root = c.root;
+  if (b.U32(root) != 9 || b.U32(root + 4) != 0x09876543) {
+    return false;
+  }
+  b.Align(16);
+  const uint32_t frame = b.U32(root + 12);
+  const uint32_t item_count = b.U32(frame), item_list = b.U32(frame + 4);
+  uint32_t templ = 0;
+  for (uint32_t i = 0; i < item_count; ++i) {
+    const uint32_t item = b.U32(item_list + i * 4);
+    if (b.U32(item) == 3 && (b.U32(item + 4) & 0x20) && b.Str(b.U32(item + 52)) == "new_btn") {
+      templ = item;
+    }
+  }
+  if (!templ) {
+    REXLOG_WARN("menu: player file movie: no new_btn to copy");
+    return false;
+  }
+  // The game's rows one place further in the focus order (Load Profile 0 to
+  // Autosave 3 become 1 to 4): in each one's load code, the PushData of
+  // "m_tabIndex" and a number gets a new constant, one more, in the number's
+  // place; the shared constants stay as they are. A PushData's items are
+  // constants, or (type 8) entries of the ConstantPool the code set up first,
+  // as Autosave's are. A negative index for ours left it out of the order.
+  const auto resolve = [&](uint32_t index, const std::vector<uint32_t>& pool) {
+    if (index < c.entries.size() && c.entries[index].type == 8 && c.entries[index].value < pool.size()) {
+      return pool[c.entries[index].value];
+    }
+    return index;
+  };
+  int moved = 0;
+  for (uint32_t i = 0; i < item_count; ++i) {
+    const uint32_t item = b.U32(item_list + i * 4);
+    if (b.U32(item) != 3 || !(b.U32(item + 4) & 0x20) || !b.U32(item + 60)) {
+      continue;
+    }
+    const std::string row = b.Str(b.U32(item + 52));
+    if (row != "load_btn" && row != "save_btn" && row != "new_btn" && row != "autosave_btn") {
+      continue;
+    }
+    const uint32_t row_events = b.U32(item + 60);
+    const uint32_t code_at = b.U32(b.U32(row_events + 4) + 8);
+    if (code_at >= data_size) {
+      continue;
+    }
+    std::vector<uint32_t> pool;
+    if (b.bytes[code_at] == 0x88) {
+      const uint32_t at = (code_at + 4) & ~3u;
+      const uint32_t count = b.U32(at), list = b.U32(at + 4);
+      for (uint32_t k = 0; k < count && list < data_size && k < (data_size - list) / 4; ++k) {
+        pool.push_back(b.U32(list + k * 4));
+      }
+    }
+    // A PushData: its count and where its list lies, any word pair that may be
+    // one, its bounds checked without overflowing.
+    const uint32_t end = std::min<uint32_t>(uint32_t(data_size), code_at + 0x200);
+    for (uint32_t p = (code_at + 3) & ~3u; p + 8 <= end; p += 4) {
+      const uint32_t count = b.U32(p), list = b.U32(p + 4);
+      if (count != 2 || list >= data_size || (data_size - list) < 8) {
+        continue;
+      }
+      const uint32_t name = resolve(b.U32(list), pool);
+      if (name >= c.entries.size() || c.entries[name].type != 1 || c.entries[name].text != "m_tabIndex") {
+        continue;
+      }
+      const uint32_t value = resolve(b.U32(list + 4), pool);
+      if (value >= c.entries.size()) {
+        continue;
+      }
+      const auto& entry = c.entries[value];
+      float number = -1.0f;
+      if (entry.type == 7) {
+        number = float(int32_t(entry.value));
+      } else if (entry.type == 6) {
+        std::memcpy(&number, &entry.value, 4);
+      }
+      if (number >= 0.0f && number <= 3.0f) {
+        b.Set32(list + 4, c.Int(int32_t(number) + 1));
+        ++moved;
+      }
+      break;
+    }
+  }
+  if (moved != 4) {
+    REXLOG_WARN("menu: player file movie: {} of its 4 rows moved in the focus order", moved);
+  }
+  const uint32_t templ_events = b.U32(templ + 60);
+  const uint32_t event_flags = b.U32(b.U32(templ_events + 4));
+
+  Code code(b);
+  code.SetEmptyName(b.PutString(""));
+  const uint32_t param_name = b.PutString("m");
+  const auto set = [&](const std::string& name, uint32_t constant) {
+    code.Push({c.String(name), constant});
+    code.Op(0x1D);  // SetVariable
+  };
+  // The button's fields, as New Profile's.
+  const uint32_t on_load = code.Start();
+  set("m_focusDirs", c.String("Up/Down"));
+  set("m_label", c.String("ACHIEVEMENTS"));
+  set("m_bEnabled", c.Bool(true));
+  set("m_refFM", c.String("_root.gFM"));
+  set("m_initiallySelected", c.Bool(false));
+  set("m_tabIndex", c.Int(0));  // first; the game's rows move down one, below
+  set("m_bVisible", c.Bool(true));
+  set("xid", c.Int(kXerengeOptionBase + xerenge::settings::kAchievements));
+  code.Op(0x00);
+  code.Finish();
+
+  // A on it (either of its codes), bound by a frame action after the screen's
+  // own setup, as Player File binds its buttons': set in the load event, the
+  // component's own setup cleared it. xerengeSelect(m), m the id passed as
+  // setOnInput's third argument: MenuSoundManager.PlaySound(SfxEnum.Select)
+  // and MenuScreenManager.SelectedOption(m).
+  const uint32_t action_code = code.Start();
+  code.Push({c.String("xerengeSelect")});
+  const uint32_t body = code.BeginFunction(param_name);
+  code.Push({c.String("SfxEnum")});
+  code.Op(0x1C);
+  code.Push({c.String("Select")});
+  code.Op(0x4E);
+  code.Push({c.Int(1), c.String("MenuSoundManager")});
+  code.Op(0x1C);
+  code.Push({c.String("PlaySound")});
+  code.Op(0x52);
+  code.Op(0x17);
+  // m: the id, setOnInput's third argument, as Player File's own buttons pass theirs.
+  code.Push({c.String("m")});
+  code.Op(0x1C);
+  code.Push({c.Int(1), c.String("MenuScreenManager")});
+  code.Op(0x1C);
+  code.Push({c.String("SelectedOption")});
+  code.Op(0x52);
+  code.Op(0x17);
+  code.EndFunction(body);
+  code.Op(0x1D);
+  for (const char* input : {"MENUPAGEFORWARD", "MENUPAGEFORWARD2"}) {
+    // xerenge_achievements_btn.setOnInput(INPUTCODE.<input>, xerengeSelect, id)
+    code.Push({c.Int(int32_t(kXerengeOptionBase + xerenge::settings::kAchievements))});
+    code.Push({c.String("xerengeSelect")});
+    code.Op(0x1C);
+    code.Push({c.String("INPUTCODE")});
+    code.Op(0x1C);
+    code.Push({c.String(input)});
+    code.Op(0x4E);
+    code.Push({c.Int(3)});
+    code.Push({c.String("xerenge_achievements_btn")});
+    code.Op(0x1C);
+    code.Push({c.String("setOnInput")});
+    code.Op(0x52);
+    code.Op(0x17);
+  }
+  code.Op(0x00);
+  code.Finish();
+
+  // The placement: New Profile's, above Load Profile (236.75), at a depth of its own.
+  b.Align(4);
+  const uint32_t events = b.Here();
+  b.Put32(1);
+  b.Put32(events + 8);
+  b.Put32(event_flags);
+  b.Put32(0);
+  b.Put32(on_load);
+  b.Align(4);
+  const uint32_t at = b.Here();
+  const std::vector<uint8_t> copy(b.bytes.begin() + templ, b.bytes.begin() + templ + 64);
+  b.bytes.insert(b.bytes.end(), copy.begin(), copy.end());
+  b.Set32(at + 8, 80);
+  b.Set32(at + 36, FloatBits(196.75f));
+  b.Set32(at + 52, b.PutString("xerenge_achievements_btn"));
+  b.Set32(at + 60, events);
+  b.Align(4);
+  const uint32_t action = b.Here();
+  b.Put32(1);
+  b.Put32(action_code);
+
+  b.Align(4);
+  const uint32_t new_item_list = b.Here();
+  for (uint32_t i = 0; i < item_count; ++i) {
+    b.Put32(b.U32(item_list + i * 4));
+  }
+  b.Put32(at);
+  b.Put32(action);
+  b.Set32(frame, item_count + 2);
+  b.Set32(frame + 4, new_item_list);
+  b.Align(16);
+  out_constants = c.Write();
+  return true;
+}
+
+// The achievements, in Driver Details > Stats's movie: its list (b4StatsList)
+// takes its rows from _global[m_serviceManager][m_serviceManagerFunc]() -
+// {page: [{title, element: [{first, second, third}, ...]}]} - which for Stats is
+// DriverDetailsStatsService.GetProfileStatistics, a native. Here it is
+// XerengeAchievements.Get, a function of ActionScript defined by a placement
+// of ours before the list loads, with the achievements written into it; the
+// title under DRIVER DETAILS is the achievements' count.
+bool RebuildAchievements(const uint8_t* data, size_t data_size, const uint8_t* constants,
+                         size_t constants_size, Blob& out_data, Blob& out_constants) {
+  Constants c;
+  if (!c.Read(constants, constants_size)) {
+    REXLOG_WARN("menu: achievements movie: its constants do not read");
+    return false;
+  }
+  Blob& b = out_data;
+  b.bytes.assign(data, data + data_size);
+  const uint32_t root = c.root;
+  if (b.U32(root) != 9 || b.U32(root + 4) != 0x09876543) {
+    return false;
+  }
+  b.Align(16);
+  const uint32_t frame = b.U32(root + 12);
+  const uint32_t item_count = b.U32(frame), item_list = b.U32(frame + 4);
+  uint32_t list_item = 0, holder_item = 0;
+  for (uint32_t i = 0; i < item_count; ++i) {
+    const uint32_t item = b.U32(item_list + i * 4);
+    if (b.U32(item) == 3 && (b.U32(item + 4) & 0x20)) {
+      const std::string name = b.Str(b.U32(item + 52));
+      if (name == "list_component") {
+        list_item = item;
+      } else if (name == "bg_holder") {
+        holder_item = item;
+      }
+    }
+  }
+  if (!list_item || !holder_item) {
+    REXLOG_WARN("menu: achievements movie: no list_component or bg_holder");
+    return false;
+  }
+  for (auto& entry : c.entries) {
+    if (entry.type != 1) {
+      continue;
+    }
+    if (entry.text == "GetProfileStatistics") {
+      entry.text = "Get";
+    } else if (entry.text == "DriverDetailsStatsService") {
+      entry.text = "XerengeAchievements";
+    } else if (entry.text == "$FEDRIVERDETSTAT") {
+      entry.text = xerenge::settings::PageTitle(xerenge::settings::kAchievements);
+    }
+  }
+
+  Code code(b);
+  code.SetEmptyName(b.PutString(""));
+  // _global.XerengeAchievements = {Get: function() { return {page: [{title,
+  // element: [{first, second, third}, ...]}]}; }}
+  const auto rows = xerenge::settings::AchievementRows();
+  const uint32_t on_load = code.Start();
+  code.Push({c.String("_global")});
+  code.Op(0x1C);  // GetVariable
+  code.Push({c.String("XerengeAchievements"), c.String("Get")});
+  const uint32_t body = code.BeginFunction(std::vector<uint32_t>{});
+  code.Push({c.String("page"), c.String("title"), c.String("ACHIEVEMENTS"), c.String("element")});
+  for (size_t i = rows.size(); i-- > 0;) {  // InitArray takes them last first
+    code.Push({c.String("first"), c.String(rows[i].name), c.String("second"), c.String(rows[i].score),
+               c.String("third"), c.String(rows[i].state), c.Int(3)});
+    code.Op(0x43);  // InitObject
+  }
+  code.Push({c.Int(int32_t(rows.size()))});
+  code.Op(0x42);  // InitArray
+  code.Push({c.Int(2)});
+  code.Op(0x43);
+  code.Push({c.Int(1)});
+  code.Op(0x42);
+  code.Push({c.Int(1)});
+  code.Op(0x43);
+  code.Op(0x3E);  // Return
+  code.EndFunction(body);
+  code.Push({c.Int(1)});
+  code.Op(0x43);
+  code.Op(0x4F);  // SetMember
+  code.Op(0x00);
+  code.Finish();
+
+  // The placement: the list's (for its clip event header), holding
+  // bg_holder's sprite, scaled to nothing, before the list in the frame.
+  const uint32_t list_events = b.U32(list_item + 60);
+  const uint32_t event_flags = b.U32(b.U32(list_events + 4));
+  b.Align(4);
+  const uint32_t events = b.Here();
+  b.Put32(1);
+  b.Put32(events + 8);
+  b.Put32(event_flags);
+  b.Put32(0);
+  b.Put32(on_load);
+  b.Align(4);
+  const uint32_t at = b.Here();
+  const std::vector<uint8_t> copy(b.bytes.begin() + list_item, b.bytes.begin() + list_item + 64);
+  b.bytes.insert(b.bytes.end(), copy.begin(), copy.end());
+  b.Set32(at + 8, 200);
+  b.Set32(at + 12, b.U32(holder_item + 12));
+  b.Set32(at + 16, 0);
+  b.Set32(at + 28, 0);
+  b.Set32(at + 52, b.PutString("xerenge_achievements_data"));
+  b.Set32(at + 60, events);
+
+  // The buttons shown at the bottom right (b4IconOptionDisplay, at 591, 418):
+  // Back B and, for the popup, Info A - its load code ours, as Player File's
+  // Buttons_Continue sets Back and Select.
+  for (uint32_t i = 0; i < item_count; ++i) {
+    const uint32_t item = b.U32(item_list + i * 4);
+    if (b.U32(item) != 3 || !(b.U32(item + 4) & 0x80) || !b.U32(item + 60) ||
+        b.U32(item + 32) != FloatBits(591.0f) || b.U32(item + 36) != FloatBits(418.0f)) {
+      continue;
+    }
+    const uint32_t buttons_code = code.Start();
+    for (const auto& [name, values] :
+         {std::pair<const char*, std::vector<const char*>>{"displayOptions", {"$FEBACK", "$XerengeInfo"}},
+          std::pair<const char*, std::vector<const char*>>{"InputCodes", {"MENUPAGEBACK", "MENUPAGEFORWARD"}}}) {
+      code.Push({c.String(name), c.Int(0)});
+      code.Op(0x42);  // InitArray
+      code.Op(0x1D);  // SetVariable
+      for (size_t v = 0; v < values.size(); ++v) {
+        code.Push({c.String(name)});
+        code.Op(0x1C);
+        code.Push({c.Int(int32_t(v)), c.String(values[v])});
+        code.Op(0x4F);  // SetMember
+      }
+    }
+    code.Op(0x00);
+    code.Finish();
+    b.Set32(b.U32(b.U32(item + 60) + 4) + 8, buttons_code);
+  }
+
+  // A on an achievement: its popup. The list's key handler (gEH's, set as it
+  // started) takes none; an action after the placements puts one of ours in
+  // front of it -
+  //   _global.xerengeListKeys = list_component.localEventHandler;
+  //   gEH.setLocalEventHandler(function(k, c) {
+  //     if (k == INPUTCODE.MENUPAGEFORWARD || k == INPUTCODE.MENUPAGEFORWARD2)
+  //       MenuScreenManager.SelectedOption(0x58100 + list_component.mnActiveItem);
+  //     else _global.xerengeListKeys(k, c);
+  //   });
+  // and the hook on SelectedOption (xerenge_menu.cpp) shows it.
+  const uint32_t name_k = b.PutString("k");
+  const uint32_t name_c = b.PutString("c");
+  const uint32_t action_code = code.Start();
+  code.Push({c.String("_global")});
+  code.Op(0x1C);
+  code.Push({c.String("xerengeListKeys"), c.String("list_component")});
+  code.Op(0x1C);
+  code.Push({c.String("localEventHandler")});
+  code.Op(0x4E);  // GetMember
+  code.Op(0x4F);  // SetMember
+  const uint32_t keys = code.BeginFunction(std::vector<uint32_t>{name_k, name_c});
+  std::vector<uint32_t> to_select;
+  for (const char* input : {"MENUPAGEFORWARD", "MENUPAGEFORWARD2"}) {
+    code.Push({c.String("k")});
+    code.Op(0x1C);
+    code.Push({c.String("INPUTCODE")});
+    code.Op(0x1C);
+    code.Push({c.String(input)});
+    code.Op(0x4E);
+    code.Op(0x49);  // Equals2
+    to_select.push_back(code.BranchIfTrue());
+  }
+  // Not A: the list's own.
+  code.Push({c.String("c")});
+  code.Op(0x1C);
+  code.Push({c.String("k")});
+  code.Op(0x1C);
+  code.Push({c.Int(2), c.String("_global")});
+  code.Op(0x1C);
+  code.Push({c.String("xerengeListKeys")});
+  code.Op(0x52);  // CallMethod
+  code.Op(0x17);  // Pop
+  const uint32_t done = code.BranchAlways();
+  for (const uint32_t branch : to_select) {
+    code.Land(branch);
+  }
+  code.Push({c.Int(int32_t(kXerengeOptionBase + 0x100)), c.String("list_component")});
+  code.Op(0x1C);
+  code.Push({c.String("mnActiveItem")});
+  code.Op(0x4E);
+  code.Op(0x47);  // Add2
+  code.Push({c.Int(1), c.String("MenuScreenManager")});
+  code.Op(0x1C);
+  code.Push({c.String("SelectedOption")});
+  code.Op(0x52);
+  code.Op(0x17);
+  code.Land(done);
+  code.EndFunction(keys);
+  code.Push({c.Int(1), c.String("gEH")});
+  code.Op(0x1C);
+  code.Push({c.String("setLocalEventHandler")});
+  code.Op(0x52);
+  code.Op(0x17);
+  code.Op(0x00);
+  code.Finish();
+  b.Align(4);
+  const uint32_t action = b.Here();
+  b.Put32(1);
+  b.Put32(action_code);
+
+  b.Align(4);
+  const uint32_t new_item_list = b.Here();
+  for (uint32_t i = 0; i < item_count; ++i) {
+    const uint32_t item = b.U32(item_list + i * 4);
+    if (item == list_item) {
+      b.Put32(at);
+    }
+    b.Put32(item);
+  }
+  b.Put32(action);
+  b.Set32(frame, item_count + 2);
+  b.Set32(frame + 4, new_item_list);
+  b.Align(16);
+  out_constants = c.Write();
+  return true;
+}
+
 // The constant file's size: up to the end of its last string.
 size_t ConstantsSize(const uint8_t* raw) {
   Blob header;
@@ -923,6 +1346,32 @@ REX_HOOK_RAW(sub_824277A0) {
     // Driver Details > Settings, or the race's pause menu's Options.
     const bool settings = Holds(raw_data, data_size, "__Packages.DriverDetailsSettingsClass");
     const bool pause = !settings && Holds(raw_data, data_size, "__Packages.PauseOptionsMenu");
+    // Driver Details > Stats's movie, asked for by that button: the achievements.
+    if (!settings && !pause && xerenge::settings::CurrentPage() == xerenge::settings::kAchievements &&
+        Holds(raw_data, data_size, "__Packages.DriverDetailsStats")) {
+      const uint8_t* raw_constants = xerenge::GuestPointer(base, constants);
+      Blob new_data, new_constants;
+      if (RebuildAchievements(raw_data, data_size, raw_constants, ConstantsSize(raw_constants), new_data,
+                              new_constants)) {
+        ctx.r4.u64 = ToGuest(base, new_data);
+        ctx.r5.u64 = ToGuest(base, new_constants);
+        REXLOG_INFO("menu: achievements movie rebuilt: data {:X} -> {:X} bytes", data_size,
+                    new_data.bytes.size());
+      }
+    }
+    // Driver Details > Player File: the ACHIEVEMENTS button.
+    if (!settings && !pause && Holds(raw_data, data_size, "DriverDetailsProfile") &&
+        Holds(raw_data, data_size, "new_btn")) {
+      const uint8_t* raw_constants = xerenge::GuestPointer(base, constants);
+      Blob new_data, new_constants;
+      if (RebuildProfile(raw_data, data_size, raw_constants, ConstantsSize(raw_constants), new_data,
+                         new_constants)) {
+        ctx.r4.u64 = ToGuest(base, new_data);
+        ctx.r5.u64 = ToGuest(base, new_constants);
+        REXLOG_INFO("menu: player file movie rebuilt: data {:X} -> {:X} bytes", data_size,
+                    new_data.bytes.size());
+      }
+    }
     if (settings || pause) {
       const uint8_t* raw_constants = xerenge::GuestPointer(base, constants);
       Blob new_data, new_constants;

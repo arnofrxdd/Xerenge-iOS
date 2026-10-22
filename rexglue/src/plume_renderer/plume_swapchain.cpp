@@ -305,6 +305,7 @@ bool PlumeSwapchain::Initialize(plume::RenderDevice* device, SDL_Window* window,
 
   device_ = device;
   post_fx_.SetDevice(device);
+  overlay_ = std::make_unique<PlumeOverlay>(device);
   window_ = window;
   native_window_ = native_window;
 
@@ -586,6 +587,7 @@ void PlumeSwapchain::WaitForFrames() {
 void PlumeSwapchain::Shutdown() {
   WaitForFrames();
   post_fx_.Shutdown();
+  overlay_.reset();
   ready_ = false;
   framebuffers_.clear();
   release_semaphores_.clear();
@@ -1244,13 +1246,20 @@ void PlumeSwapchain::ClearAndPresent(float r, float g, float b, float a, DrawEnc
       out->copyTexture(swapchain_texture, shown);
     }
     // On the image shown, after the copy: drawn into the target, the counter
-    // would go wherever the title copies that target to.
-    if (FpsShown()) {
+    // would go wherever the title copies that target to. The game's notice
+    // likewise, its picture uploaded before the pass.
+    const bool overlay = overlay_ && overlay_->Prepare(out, kSwapchainFormat);
+    if (FpsShown() || overlay) {
       out->barriers(plume::RenderBarrierStage::GRAPHICS,
                     plume::RenderTextureBarrier(swapchain_texture,
                                                 plume::RenderTextureLayout::COLOR_WRITE));
       out->setFramebuffer(framebuffer);
-      DrawFpsCounter(out, window_height, fps);
+      if (FpsShown()) {
+        DrawFpsCounter(out, window_height, fps);
+      }
+      if (overlay) {
+        overlay_->Draw(out, window_width, window_height);
+      }
       out->setFramebuffer(nullptr);
     }
   }

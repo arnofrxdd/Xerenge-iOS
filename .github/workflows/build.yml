@@ -130,6 +130,7 @@ jobs:
           mkdir -p "$payload/bin" "$payload/tools"
           cp rexglue/build/burnout "$payload/bin/burnout_eu"
           find rexglue/build rexglue-sdk/out/linux-amd64 -maxdepth 2 -name '*.so*' -not -path '*/Debug/*' -exec cp -a {} "$payload/bin/" \;
+          cp rexglue/plume_pipelines.txt "$payload/bin/"  # the pipelines met playing it through: made during the logos
           # The launcher (launcher.cpp), beside the game once installed.
           c++ -std=c++17 -O2 rexglue/installer/launcher.cpp -o "$payload/burnout_revenge"
           cp tools/bin/extract-image "$payload/tools/"
@@ -279,6 +280,7 @@ jobs:
           mkdir -p "$payload/bin" "$payload/tools"
           cp rexglue/build/burnout.exe "$payload/bin/burnout_eu.exe"
           find rexglue/build rexglue-sdk/out/win-amd64 -maxdepth 2 -name '*.dll' -not -path '*/Debug/*' -exec cp {} "$payload/bin/" \;
+          cp rexglue/plume_pipelines.txt "$payload/bin/"  # the pipelines met playing it through: made during the logos
           cp tools/bin/extract-image.exe "$payload/tools/"
           cp "rexglue/installer/build/Burnout Revenge.exe" "$payload/"
           cp rexglue/installer/build/xerenge-installer.exe "$package/"
@@ -554,6 +556,7 @@ jobs:
           mkdir -p "$payload/bin" "$payload/tools"
           cp rexglue/build/burnout "$payload/bin/burnout_eu"
           find rexglue/build rexglue-sdk/out/mac-arm64 -maxdepth 2 -name '*.dylib' -not -path '*/Debug/*' -exec cp -a {} "$payload/bin/" \;
+          cp rexglue/plume_pipelines.txt "$payload/bin/"  # the pipelines met playing it through: made during the logos
           cp -R rexglue/build/vulkan "$payload/bin/vulkan"
           # The launcher (launcher.cpp), beside the game once installed.
           c++ -std=c++17 -O2 rexglue/installer/launcher.cpp -o "$payload/burnout_revenge"
@@ -686,10 +689,14 @@ jobs:
           **Online play works out of the box** - the installer points at the server (`94639.snk.wtf`), where everyone plays together; there is nothing to set up. An install from before the server is moved to it when the installer runs over it.
 
           **What's new in 0.4.8:**
-          - **Settings in the game**: Driver Details > Settings has GRAPHICS, HACKS and DEBUG pages next to the sound rows - the installer's options as the game's own rows, kept in `xerenge.conf`. Anti-aliasing and sharpening change at once; for the rest, leaving Settings offers to restart the game (A restarts it, B keeps playing). The European release also gets a Language row there.
+          - **Settings in the game**: Driver Details > Settings has GRAPHICS, HACKS and DEBUG pages next to the sound rows - the installer's options as the game's own rows, kept in `xerenge.conf`. Bloom, motion blur, anti-aliasing and sharpening change at once; for the rest, leaving Settings offers to restart the game (A restarts it, B keeps playing). The European release also gets a Language row there.
           - **A real launcher instead of scripts**: `Burnout Revenge.exe` on Windows, `burnout_revenge` on Linux and macOS, beside the installed game - it reads `xerenge.conf` and starts the game. **Steam users:** the old `Burnout Revenge.cmd` / `burnout-revenge` are gone; add the new launcher to Steam as a non-Steam game instead (GitHub #26).
           - **Xbox Live and Burnout Clips connect in seconds** again, not after 2 minutes (GitHub #24).
           - **EA Trax no longer goes silent** after skipping a challenge-complete, rank-up or signature takedown video (GitHub #29).
+          - **GRAPHICS in the pause menu**: the race's Options get bloom, motion blur, sharpening and anti-aliasing, changed without leaving the race.
+          - **News**: the game's News screen shows the latest Xerenge release's notes.
+          - **Debug > RenderDoc**: off hides RenderDoc's "Capturing Vulkan" overlay where RenderDoc is installed, e.g. on a Steam Deck (GitHub #31).
+          - **Online**: a player joining a game hosted through another server is told about it before the host invites them (GitHub #34).
 
           EOF
           gh release create "v$VERSION" --title "$VERSION" --latest --target "$GITHUB_SHA" \

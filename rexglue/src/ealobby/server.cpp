@@ -179,8 +179,22 @@ std::string AddressString(const sockaddr_in& address) {
   return text;
 }
 
+// From the system's own source for every key: one generator seeded once gave
+// its state away to anyone who logged in often enough, and with it the LKEY of
+// the next persona (its Locker files).
+// An address on a LAN (RFC 1918, loopback, link-local): where the other servers
+// of seamless multiplayer are, and nothing from the internet is.
+bool IsLanAddress(const std::string& address) {
+  unsigned a = 0, b = 0, c = 0, d = 0;
+  if (std::sscanf(address.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) != 4) {
+    return false;
+  }
+  return a == 10 || a == 127 || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168) ||
+         (a == 169 && b == 254);
+}
+
 std::string RandomHex(size_t bytes) {
-  static std::mt19937_64 random{std::random_device{}()};
+  std::random_device random;
   static const char digits[] = "0123456789abcdef";
   std::string out;
   for (size_t i = 0; i < bytes; ++i) {
@@ -361,7 +375,7 @@ void Server::Run() {
       }
       fds.push_back(MakePollFd(fd, short(POLLIN | (connection->out.empty() ? 0 : POLLOUT))));
     }
-    if (PollWait(fds, 1000) < 0) {
+    if (PollWait(fds, held_games_.empty() ? 1000 : 50) < 0) {
       const int code = LastSocketError();
       if (Interrupted(code)) {
         continue;
@@ -369,6 +383,7 @@ void Server::Run() {
       Log("ealobby: poll: " + SocketErrorString(code));
       break;
     }
+    SendHeldGames();
     if (fds[1].revents & POLLIN) {
       Accept(directory_listener_, Role::kDirectory);
     }
@@ -535,6 +550,16 @@ void Server::Send(Connection& connection, const std::vector<uint8_t>& bytes) {
 
 void Server::Handle(Connection& connection, const Message& message) {
   if (connection.role == Role::kLobby && message.command == "xhlo") {
+    // Only another server of seamless multiplayer, on the LAN, from the address
+    // it names: a client that sent xhlo became a link and could push anything
+    // to anyone.
+    const std::string from = connection.peer.substr(0, connection.peer.find(':'));
+    const Fields hello = ParseFields(message.body);
+    const auto node = hello.find("NODE");
+    if (options_.self_address.empty() || !IsLanAddress(from) || node == hello.end() || node->second != from) {
+      Log("federation: xhlo from " + connection.peer + " refused");
+      return;
+    }
     connection.role = Role::kPeer;
   }
   if (connection.role == Role::kPeer) {
@@ -853,7 +878,7 @@ void Server::HandleLobby(Connection& connection, const Message& message) {
     }
     connection.user_params = field("USERPARAMS", connection.user_params);
     reply_with(GameRecord(*game, connection));
-    SendGameToPlayers(*game);
+    SendGameAfterRemoteJoin(*game, connection);
     SendWho(connection);
     return;
   }
@@ -894,7 +919,7 @@ void Server::HandleLobby(Connection& connection, const Message& message) {
     connection.game = game->id;
     connection.user_params = field("USERPARAMS", connection.user_params);
     reply_with(GameRecord(*game, connection));
-    SendGameToPlayers(*game);
+    SendGameAfterRemoteJoin(*game, connection);
     SendWho(connection);
     return;
   }
@@ -931,6 +956,14 @@ void Server::HandleLobby(Connection& connection, const Message& message) {
       return;
     }
     Game& game = it->second;
+    // The game itself and its players are the host's to change; another player
+    // changes only its own USERPARAMS.
+    if (game.players.empty() || game.players.front() != connection.fd) {
+      connection.user_params = field("USERPARAMS", connection.user_params);
+      reply_with(GameRecord(game, connection));
+      SendGameToPlayers(game);
+      return;
+    }
     // The host's "kick player": KICK names the player. The game finds it was kicked when its own name is
     // missing from the game's player list (CGtLobbyDirtySock::CheckForPlayerKicked), and shows "kicked" instead
     // of "removed" if a message with flag bit 29 ("2") came first.
@@ -1186,6 +1219,31 @@ void Server::SendGameToPlayers(const Game& game) {
   }
 }
 
+void Server::SendGameAfterRemoteJoin(const Game& game, Connection& joiner) {
+  if (joiner.role != Role::kRemote) {
+    SendGameToPlayers(game);
+    return;
+  }
+  const Fields record = GameRecord(game, joiner);
+  Send(joiner, Encode("+mgm", record));
+  held_games_.push_back({std::chrono::steady_clock::now() + std::chrono::milliseconds(250), game.id});
+}
+
+void Server::SendHeldGames() {
+  const auto now = std::chrono::steady_clock::now();
+  for (auto it = held_games_.begin(); it != held_games_.end();) {
+    if (it->first > now) {
+      ++it;
+      continue;
+    }
+    // As it is by then: whoever joined or left since included.
+    if (const auto game = games_.find(it->second); game != games_.end()) {
+      SendGameToPlayers(game->second);
+    }
+    it = held_games_.erase(it);
+  }
+}
+
 void Server::LeaveGame(Connection& connection) {
   auto it = games_.find(connection.game);
   connection.game = 0;
@@ -1338,6 +1396,13 @@ void Server::ReceiveBeacon() {
       continue;
     }
     if (options_.self_address == server) {
+      continue;
+    }
+    // Only a server on the LAN announcing itself: one beacon naming another
+    // address sent the players wherever it chose.
+    char from_text[INET_ADDRSTRLEN] = {};
+    inet_ntop(AF_INET, &from.sin_addr, from_text, sizeof(from_text));
+    if (!IsLanAddress(server) || std::strcmp(from_text, server) != 0) {
       continue;
     }
     const std::vector<uint8_t> bytes = Unhex(blob);
@@ -1540,8 +1605,10 @@ void Server::HandlePeer(Connection& link, const Message& message) {
       return;
     }
     // The client's end: what the host answers goes to the client as it is.
+    // Only to a client joined through this very link: any other player's id is
+    // its gamertag's hash, which anyone can work out.
     for (const auto& [fd, connection] : connections_) {
-      if (connection->role == Role::kLobby && connection->id == id) {
+      if (connection->role == Role::kLobby && connection->id == id && connection->remote_link == link.fd) {
         Send(*connection, bytes);
         return;
       }

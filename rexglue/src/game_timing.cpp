@@ -71,6 +71,14 @@ struct FrameClock {
   float menu_sharpening = -1.0f;
   // And the bloom: 1 on, 0 off, -1 unchanged.
   int32_t menu_bloom = -1;
+  // And a picture to lay over the shown frame (achievement_toast.cpp): straight
+  // RGBA at its size for a 1080-line window, a generation that changes with each
+  // new one, and how opaque it is now (0: none shown).
+  const uint8_t* overlay_pixels = nullptr;
+  uint32_t overlay_width = 0;
+  uint32_t overlay_height = 0;
+  uint32_t overlay_generation = 0;
+  float overlay_opacity = 0.0f;
 };
 FrameClock g_clock;
 uint32_t g_clock_timer = 0;
@@ -290,10 +298,16 @@ extern "C" RexFrameClockProviderFn rex_frame_clock_provider;
 extern "C" REX_HOST_EXPORT RexFrameClockProviderFn rex_frame_clock_provider = nullptr;
 #endif
 
+// The notice shown now, if any (achievement_toast.cpp).
+void XerengeOverlayFrame(const uint8_t** pixels, uint32_t* width, uint32_t* height,
+                         uint32_t* generation, float* opacity);
+
 namespace {
 void CopyFrameClock(void* out, size_t size) {
   // A reader may know only the fields before menu_anti_aliasing.
   if (out) {
+    XerengeOverlayFrame(&g_clock.overlay_pixels, &g_clock.overlay_width, &g_clock.overlay_height,
+                        &g_clock.overlay_generation, &g_clock.overlay_opacity);
     std::memcpy(out, &g_clock, std::min(size, sizeof(FrameClock)));
   }
 }
