@@ -121,7 +121,18 @@ REX_HOOK_RAW(sub_82353BA8) {
     // (16:10): x stays and y grows - the same width of view, more above and
     // below, rather than the picture squeezed upright.
     if (factor > 1.0f) {
-      StoreGuestFloat(base, viewport + 112, scale * factor);
+      static const float fov_multiplier = [] {
+        if (const char* env = std::getenv("XERENGE_FOV_FACTOR")) {
+          return std::strtof(env, nullptr);
+        }
+#if defined(__APPLE__)
+        return 1.0f;
+#else
+        return 0.0f;
+#endif
+      }();
+      const float fov_scale = fov_multiplier > 0.0f ? fov_multiplier : factor;
+      StoreGuestFloat(base, viewport + 112, scale * fov_scale);
     }
     StoreGuestFloat(base, viewport + 116, aspect * factor);
   }
