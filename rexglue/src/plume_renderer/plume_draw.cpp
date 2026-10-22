@@ -7197,6 +7197,29 @@ void StartEncodeWatchdog() {
     }).detach();
   });
 }
+float GetDrawDistance(const GuestDrawSnapshot& snap) {
+  const ShaderSourceInfo* info = FindShaderSourceInfo(snap.vs_hash);
+  if (!info || info->matrix_registers.empty()) {
+    return 0.0f;
+  }
+  const float* vc = reinterpret_cast<const float*>(snap.vs_constants.data());
+  float max_dist = 0.0f;
+  for (uint16_t r : info->matrix_registers) {
+    if (r >= 256) {
+      continue;
+    }
+    const float z = vc[size_t(r) * 4 + 2];
+    const float w = vc[size_t(r) * 4 + 3];
+    if (std::isfinite(z) && std::fabs(z) < 10000.0f && std::fabs(z) > max_dist) {
+      max_dist = std::fabs(z);
+    }
+    if (std::isfinite(w) && std::fabs(w) < 10000.0f && std::fabs(w) > max_dist) {
+      max_dist = std::fabs(w);
+    }
+  }
+  return max_dist;
+}
+
 }  // namespace
 
 void PlumeDrawContext::ChooseReflectionFaces(const std::vector<GuestDrawSnapshot>& draws) {
@@ -7212,6 +7235,19 @@ void PlumeDrawContext::ChooseReflectionFaces(const std::vector<GuestDrawSnapshot
   bool cube_seen = false;
   size_t face_start = 0;
   std::unordered_set<uint64_t> seen_cube_faces;
+
+#if defined(__APPLE__)
+  // On mobile (6.1" retina screen), the player only watches their own car.
+  // The first cubemap destination in each frame belongs to the player car.
+  uint32_t player_cube_dest = 0;
+  for (size_t i = 0; i < draws.size(); ++i) {
+    if (draws[i].is_resolve && draws[i].resolve_cube && draws[i].resolve_face < 6) {
+      player_cube_dest = draws[i].resolve_dest;
+      break;
+    }
+  }
+#endif
+
   for (size_t i = 0; i < draws.size(); ++i) {
     const GuestDrawSnapshot& snap = draws[i];
     if (!snap.is_resolve) {
@@ -7220,7 +7256,13 @@ void PlumeDrawContext::ChooseReflectionFaces(const std::vector<GuestDrawSnapshot
     if (snap.resolve_cube && snap.resolve_face < 6) {
       cube_seen = true;
       const uint64_t face_key = (uint64_t(snap.resolve_dest) << 3) | snap.resolve_face;
+#if defined(__APPLE__)
+      // Refresh 1 face per frame for player car (% 6), skipping dynamic cubemaps for secondary traffic
+      const bool is_player = (player_cube_dest == 0 || snap.resolve_dest == player_cube_dest);
+      const bool is_turn = is_player && (snap.resolve_face == reflection_turn_);
+#else
       const bool is_turn = (snap.resolve_face / 2 == reflection_turn_);
+#endif
       const bool already_seen = !seen_cube_faces.insert(face_key).second;
       static uint32_t described = 0;
       if (xerenge::Diagnostics() && described < 12) {
@@ -7261,8 +7303,51 @@ void PlumeDrawContext::ChooseReflectionFaces(const std::vector<GuestDrawSnapshot
     face_start = i + 1;
   }
   if (cube_seen) {
+#if defined(__APPLE__)
+    reflection_turn_ = (reflection_turn_ + 1) % 6;
+#else
     reflection_turn_ = (reflection_turn_ + 1) % 3;
+#endif
   }
+
+#if defined(__APPLE__)
+  // Mobile distant drop-shadow culling:
+  // Beyond 35m down the road, planar vehicle drop shadows on a 6.1" retina screen occupy < 2 pixels.
+  // Culling them saves 20-40 passes per frame in heavy traffic with zero visual difference.
+  static const bool cull_shadows = std::getenv("XERENGE_NO_SHADOW_CULL") == nullptr;
+  if (cull_shadows) {
+    uint32_t culled_this_frame = 0;
+    for (size_t i = 0; i < draws.size(); ++i) {
+      const GuestDrawSnapshot& snap = draws[i];
+      if (snap.d3d_vertex_buffer != 0 && !snap.interface_draw && snap.poly_offset &&
+          snap.depth_control != 0 && (snap.depth_control & 0x2) == 0 && snap.blend_control != 0 &&
+          snap.num_indices <= 64) {
+        const float dist = GetDrawDistance(snap);
+        if (dist > 35.0f) {
+          if (skip_draw_.empty()) {
+            skip_draw_.assign(draws.size(), 0);
+          }
+          skip_draw_[i] = 1;
+          ++culled_this_frame;
+        }
+      }
+    }
+    if (culled_this_frame > 0) {
+      static std::atomic<uint64_t> total_culled{0};
+      static std::atomic<uint64_t> frames_culled{0};
+      static auto last_log = std::chrono::steady_clock::now();
+      total_culled.fetch_add(culled_this_frame, std::memory_order_relaxed);
+      frames_culled.fetch_add(1, std::memory_order_relaxed);
+      const auto now = std::chrono::steady_clock::now();
+      if (now - last_log >= std::chrono::seconds(3)) {
+        last_log = now;
+        REXLOG_INFO("plume: culled {} distant vehicle drop shadows (avg {:.1f}/frame)",
+                    total_culled.load(),
+                    double(total_culled.load()) / double(frames_culled.load()));
+      }
+    }
+  }
+#endif
 }
 
 void PlumeDrawContext::EncodeDraws(plume::RenderCommandList* list,

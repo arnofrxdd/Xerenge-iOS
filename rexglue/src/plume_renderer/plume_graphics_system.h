@@ -344,7 +344,7 @@ class PlumeGraphicsSystem final : public system::IGraphicsSystem {
   uint64_t pending_d3d_shaders_[2] = {0, 0};
   std::atomic<uint32_t> d3d_unresolved_log_count_{0};
   std::atomic<uint32_t> slow_present_log_count_{0};
-  bool present_in_flight_ = false;
+  uint32_t present_in_flight_ = 0;
   std::mutex present_flight_mutex_;
   std::condition_variable present_flight_cv_;
   std::atomic<uint32_t> slow_consume_log_count_{0};
@@ -366,9 +366,11 @@ class PlumeGraphicsSystem final : public system::IGraphicsSystem {
   std::thread present_worker_;
   std::mutex present_request_mutex_;
   std::condition_variable present_request_cv_;
-  bool present_request_pending_ = false;
-  uint32_t present_request_width_ = 0;
-  uint32_t present_request_height_ = 0;
+  struct PresentRequest {
+    uint32_t width = 0;
+    uint32_t height = 0;
+  };
+  std::deque<PresentRequest> present_requests_;
   std::atomic<bool> present_worker_running_{false};
   uint32_t last_secondary_cursor_ = 0;
   uint32_t secondary_lap_ = 0;

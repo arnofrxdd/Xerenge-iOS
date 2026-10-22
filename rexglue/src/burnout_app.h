@@ -31,7 +31,7 @@ class BurnoutApp : public rex::ReXApp {
     setenv("XERENGE_WORKERS", "2", 1);
     setenv("XERENGE_REFLECTION_SPLIT", "1", 1);
     setenv("XERENGE_ASYNC_PRESENT", "1", 1);
-    setenv("XERENGE_RENDER_RESOLUTION", "1280x720", 1);
+    setenv("XERENGE_RENDER_RESOLUTION", "1386x640", 1);
     setenv("XERENGE_NO_SECOND_TARGET", "1", 1);
     setenv("XERENGE_NO_MOTION_BLUR", "1", 1);
     setenv("XERENGE_AA", "fxaa", 1);

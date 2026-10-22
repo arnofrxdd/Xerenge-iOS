@@ -939,14 +939,14 @@ void PlumeGraphicsSystem::StartPresentWorker() {
       {
         std::unique_lock lock(present_request_mutex_);
         present_request_cv_.wait(lock, [this] {
-          return present_request_pending_ || !present_worker_running_.load(std::memory_order_acquire);
+          return !present_requests_.empty() || !present_worker_running_.load(std::memory_order_acquire);
         });
         if (!present_worker_running_.load(std::memory_order_acquire)) {
           return;
         }
-        w = present_request_width_;
-        h = present_request_height_;
-        present_request_pending_ = false;
+        w = present_requests_.front().width;
+        h = present_requests_.front().height;
+        present_requests_.pop_front();
       }
 #if defined(__ANDROID__)
       static FrameHint frame_hint;
@@ -961,7 +961,9 @@ void PlumeGraphicsSystem::StartPresentWorker() {
 #endif
       {
         std::lock_guard lock(present_flight_mutex_);
-        present_in_flight_ = false;
+        if (present_in_flight_ > 0) {
+          --present_in_flight_;
+        }
       }
       present_flight_cv_.notify_one();
     }
@@ -1959,8 +1961,14 @@ void PlumeGraphicsSystem::PresentGuestFrame(uint32_t width, uint32_t height) {
     {
       const auto wait_started = std::chrono::steady_clock::now();
       std::unique_lock lock(present_flight_mutex_);
+#if defined(__APPLE__)
+      // Allow up to 2 frames in flight on iOS so transient GPU bursts do not stall CPU physics
+      constexpr uint32_t kMaxInFlight = 2;
+#else
+      constexpr uint32_t kMaxInFlight = 1;
+#endif
       const bool ready = present_flight_cv_.wait_for(lock, std::chrono::milliseconds(2000),
-                                                     [this] { return !present_in_flight_; });
+                                                     [this] { return present_in_flight_ < kMaxInFlight; });
       // The title's own thread, blocked on this renderer: per second, so a
       // frozen scene change shows whether the time went here or elsewhere.
       {
@@ -1985,13 +1993,11 @@ void PlumeGraphicsSystem::PresentGuestFrame(uint32_t width, uint32_t height) {
         REXLOG_WARN("plume: present_flight timed out waiting for previous frame");
         return;
       }
-      present_in_flight_ = true;
+      ++present_in_flight_;
     }
     {
       std::lock_guard lock(present_request_mutex_);
-      present_request_width_ = width;
-      present_request_height_ = height;
-      present_request_pending_ = true;
+      present_requests_.push_back({width, height});
     }
     present_request_cv_.notify_one();
     return;
@@ -2089,13 +2095,11 @@ void PlumeGraphicsSystem::PresentClearColorOnUiThread(uint32_t guest_width,
       std::lock_guard snap_lock(snapshot_mutex_);
       if (draw_ring_count_ != 0) {
         const uint32_t start = (draw_ring_next_ + kDrawRingSize - draw_ring_count_) % kDrawRingSize;
-        // Up to the last Swap the title made: what it issued after that is the
-        // start of its next frame. Taken along, the next frame's first clear
-        // and draws landed after this frame's final copy, the cleared target
-        // was shown instead of the copy, and a black frame flashed up.
+        // Up to the first completed Swap the title made: what it issued after that is the
+        // start of its next frame.
         uint32_t take = draw_ring_count_;
         bool found_end = false;
-        for (uint32_t i = draw_ring_count_; i-- > 0;) {
+        for (uint32_t i = 0; i < draw_ring_count_; ++i) {
           if (draw_ring_[(start + i) % kDrawRingSize].is_frame_end) {
             take = i + 1;
             found_end = true;
