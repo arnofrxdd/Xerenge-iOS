@@ -72,3 +72,4 @@ rexglue/tools/run_prepare_etc2
 *.log
 *.ips
 screenshot_*.png
+*.ipa
