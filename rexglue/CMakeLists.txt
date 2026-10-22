@@ -18,9 +18,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(generated/rexglue.cmake)
 
+# The achievement notice's font (achievement_toast.cpp), Roboto Medium (Apache
+# 2.0) from imgui's fonts, as bytes in the game: one file on every system.
+set(TOAST_FONT "${REXSDK_DIR}/thirdparty/imgui/misc/fonts/Roboto-Medium.ttf")
+set(TOAST_FONT_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/toast_font.cpp")
+if(NOT EXISTS "${TOAST_FONT_CPP}" OR "${TOAST_FONT}" IS_NEWER_THAN "${TOAST_FONT_CPP}")
+    file(READ "${TOAST_FONT}" toast_font_hex HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," toast_font_bytes "${toast_font_hex}")
+    file(WRITE "${TOAST_FONT_CPP}"
+        "#include <cstddef>\nextern const unsigned char kToastFont[] = {${toast_font_bytes}};\n"
+        "extern const size_t kToastFontSize = sizeof(kToastFont);\n")
+endif()
+
 # Sources
 set(BURNOUT_SOURCES
     src/main.cpp
+    src/achievement_toast.cpp
+    "${TOAST_FONT_CPP}"
     src/movie_trace.cpp
     src/menu_trace.cpp
     src/xerenge_menu.cpp
@@ -64,6 +78,13 @@ elseif(IOS)
         XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "YES"
         XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
     )
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/plume_pipelines.txt")
+        add_custom_command(TARGET burnout POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/plume_pipelines.txt"
+            "$<TARGET_FILE_DIR:burnout>/plume_pipelines.txt"
+        )
+    endif()
 else()
     add_executable(burnout ${BURNOUT_SOURCES})
 endif()
@@ -298,18 +319,6 @@ rexglue_setup_target(burnout GPU_PLUGINS xenos plume)
 # framework has to name it itself.
 target_include_directories(burnout PRIVATE "${REXSDK_DIR}/thirdparty/imgui")
 
-# The achievement notice's font (achievement_toast.cpp), Roboto Medium (Apache
-# 2.0) from imgui's fonts, as bytes in the game: one file on every system.
-set(TOAST_FONT "${REXSDK_DIR}/thirdparty/imgui/misc/fonts/Roboto-Medium.ttf")
-set(TOAST_FONT_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated/toast_font.cpp")
-if(NOT EXISTS "${TOAST_FONT_CPP}" OR "${TOAST_FONT}" IS_NEWER_THAN "${TOAST_FONT_CPP}")
-    file(READ "${TOAST_FONT}" toast_font_hex HEX)
-    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," toast_font_bytes "${toast_font_hex}")
-    file(WRITE "${TOAST_FONT_CPP}"
-        "#include <cstddef>\nextern const unsigned char kToastFont[] = {${toast_font_bytes}};\n"
-        "extern const size_t kToastFontSize = sizeof(kToastFont);\n")
-endif()
-target_sources(burnout PRIVATE src/achievement_toast.cpp "${TOAST_FONT_CPP}")
 target_include_directories(burnout PRIVATE "${REXSDK_DIR}/thirdparty/stb")
 
 # plume is built above and linked only into librexgpu-plume.so (see
