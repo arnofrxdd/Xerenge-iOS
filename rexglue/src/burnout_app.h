@@ -28,6 +28,9 @@ class BurnoutApp : public rex::ReXApp {
     setenv("XERENGE_REAL_SHADERS", "1", 1);
     setenv("XERENGE_D3D_DRAWS", "1", 1);
     setenv("XERENGE_SECONDARY_TICKS", "1", 1);
+    setenv("XERENGE_RENDER_RESOLUTION", "1280x720", 1);
+    setenv("XERENGE_VBLANK_HZ", "60", 1);
+    setenv("XERENGE_POWER_MODE", "stock", 1);
 #endif
     return std::unique_ptr<BurnoutApp>(new BurnoutApp(ctx, "burnout",
         PPCImageConfig));

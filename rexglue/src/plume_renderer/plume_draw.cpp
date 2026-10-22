@@ -435,7 +435,11 @@ bool TranscodeBcToEtc2(rex::graphics::xenos::TextureFormat base_fmt,
   return true;
 }
 
+#if defined(__ANDROID__) || defined(__APPLE__)
+constexpr uint32_t kBindlessTextureCount = 2048;
+#else
 constexpr uint32_t kBindlessTextureCount = 4096;
+#endif
 constexpr uint32_t kIdentityLutSize = 64;
 constexpr uint32_t kBindlessSamplerCount = 64;
 // The sampler slots a draw has: Xenos's sixteen texture fetch slots.

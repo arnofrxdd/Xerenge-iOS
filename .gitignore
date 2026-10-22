@@ -65,7 +65,7 @@ rexglue/tools/make_runtime_shader_recipe
 .clawhip/
 rexglue/build-lobby/
 etc2_cache/
-ios/
+ios/build_test/
 scratch/
 *.7z
 rexglue/tools/run_prepare_etc2
