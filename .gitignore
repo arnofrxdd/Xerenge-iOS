@@ -69,3 +69,6 @@ ios/build_test/
 scratch/
 *.7z
 rexglue/tools/run_prepare_etc2
+*.log
+*.ips
+screenshot_*.png
