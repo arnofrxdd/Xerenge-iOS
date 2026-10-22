@@ -6300,7 +6300,12 @@ void PlumeDrawContext::BindGuestTextures(plume::RenderCommandList* list,
   if (mesh_seen_once_.size() > 65536) {
     mesh_seen_once_.clear();
   }
-  if (mesh_cache_.size() > 262144) {
+#if defined(__APPLE__)
+  constexpr size_t kMaxMeshCacheEntries = 16384;
+#else
+  constexpr size_t kMaxMeshCacheEntries = 262144;
+#endif
+  if (mesh_cache_.size() > kMaxMeshCacheEntries) {
     ++cache_resets_;
     REXLOG_INFO("plume: vertex cache full ({} vertices, {} meshes), starting over (#{})",
                 cache_used_, mesh_cache_.size(), cache_resets_);
@@ -6391,6 +6396,13 @@ void PlumeDrawContext::BindGuestTextures(plume::RenderCommandList* list,
           mip_src = memory->TranslatePhysical<const uint8_t*>(mips.address);
         }
         const size_t mip_size = mip_src ? mips.size : 0;
+        // Fast-path: if this texture is already uploaded and has a known content hash,
+        // reuse it directly to eliminate redundant XXH3 hashing and mprotect overhead.
+        if (auto it = guest_textures_.find(key);
+            it != guest_textures_.end() && it->second && it->second->uploaded && it->second->content_hash != 0) {
+          frame_hashes.emplace(key, it->second->content_hash);
+          continue;
+        }
         if (page_writes_) {
           // Still watched since it was last hashed: the watch comes off a page
           // only when the page is written, which counts. Set again every frame
@@ -7191,6 +7203,7 @@ void PlumeDrawContext::ChooseReflectionFaces(const std::vector<GuestDrawSnapshot
   // frame's own, ahead of the first face.
   bool cube_seen = false;
   size_t face_start = 0;
+  std::unordered_set<uint64_t> seen_cube_faces;
   for (size_t i = 0; i < draws.size(); ++i) {
     const GuestDrawSnapshot& snap = draws[i];
     if (!snap.is_resolve) {
@@ -7198,6 +7211,9 @@ void PlumeDrawContext::ChooseReflectionFaces(const std::vector<GuestDrawSnapshot
     }
     if (snap.resolve_cube && snap.resolve_face < 6) {
       cube_seen = true;
+      const uint64_t face_key = (uint64_t(snap.resolve_dest) << 3) | snap.resolve_face;
+      const bool is_turn = (snap.resolve_face / 2 == reflection_turn_);
+      const bool already_seen = !seen_cube_faces.insert(face_key).second;
       static uint32_t described = 0;
       if (xerenge::Diagnostics() && described < 12) {
         ++described;
@@ -7219,7 +7235,7 @@ void PlumeDrawContext::ChooseReflectionFaces(const std::vector<GuestDrawSnapshot
                     snap.resolve_face, snap.resolve_width, snap.resolve_height, reflection_turn_,
                     text);
       }
-      if (snap.resolve_face / 2 != reflection_turn_) {
+      if (!is_turn || already_seen) {
         if (skip_draw_.empty()) {
           skip_draw_.assign(draws.size(), 0);
         }
@@ -7748,9 +7764,19 @@ void PlumeDrawContext::EncodeDraws(plume::RenderCommandList* list,
       note_skip("invalid snapshot");
       return;
     }
-    if (static_cast<PrimitiveType>(snap.prim_type) == PrimitiveType::kPointList &&
+    const auto prim = static_cast<PrimitiveType>(snap.prim_type);
+    if ((prim == PrimitiveType::kTriangleList || prim == PrimitiveType::kTriangleStrip ||
+         prim == PrimitiveType::kTriangleFan || prim == PrimitiveType::kRectangleList) &&
         snap.num_indices < 3) {
-      note_skip("degenerate point list");
+      note_skip("degenerate triangle");
+      return;
+    }
+    if (prim == PrimitiveType::kQuadList && snap.num_indices < 4) {
+      note_skip("degenerate quad");
+      return;
+    }
+    if (prim == PrimitiveType::kLineList && snap.num_indices < 2) {
+      note_skip("degenerate line");
       return;
     }
     if (vb_used >= vb_base + kVertsPerFrame || encoded >= kSlotsPerFrame) {
@@ -8777,6 +8803,44 @@ void PlumeDrawContext::EncodeDraws(plume::RenderCommandList* list,
               copy.face == snap.resolve_face && copy.cube == snap.resolve_cube) {
             repeat = copy.writes == target_writes;
             break;
+          }
+        }
+        if (snap.resolve_cube && !repeat) {
+          for (const FrameCopy& copy : frame_copies) {
+            if (copy.dest == snap.resolve_dest && copy.face == snap.resolve_face && copy.cube) {
+              repeat = true;
+              break;
+            }
+          }
+        }
+        if (!repeat && !snap.resolve_cube && !IsKnownFrontBuffer(snap.resolve_dest)) {
+          bool overwritten_before_read = false;
+          for (size_t next_i = snap_index + 1; next_i < draws.size(); ++next_i) {
+            const GuestDrawSnapshot& next_snap = draws[next_i];
+            if (next_snap.is_resolve && next_snap.resolve_dest == snap.resolve_dest &&
+                next_snap.resolve_source == snap.resolve_source && !next_snap.resolve_cube) {
+              overwritten_before_read = true;
+              break;
+            }
+            if (!next_snap.is_resolve && !next_snap.is_clear) {
+              const uint32_t used = UsedTextureSlots(next_snap);
+              bool read = false;
+              for (uint32_t s = 0; s < rex::graphics::xenos::kTextureFetchConstantCount; ++s) {
+                if ((used & (1u << s)) != 0) {
+                  const auto f = TextureFetchAt(next_snap, s);
+                  if ((f.base_address << 12) == snap.resolve_dest) {
+                    read = true;
+                    break;
+                  }
+                }
+              }
+              if (read) {
+                break;
+              }
+            }
+          }
+          if (overwritten_before_read) {
+            repeat = true;
           }
         }
         uint32_t region_w = 0;
