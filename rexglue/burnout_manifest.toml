@@ -3,9 +3,9 @@
 [project]
 name = "burnout"
 sdk_version = "0.10.0"
-game_root = "/home/shipa/Projects/Xerenge/game_us"
+game_root = "/Users/arnav/Projects/Xerenge/game"
 
 [entrypoint]
-file_path = "/home/shipa/Projects/Xerenge/game_us/default.xex"
+file_path = "/Users/arnav/Projects/Xerenge/game/default.xex"
 out_directory_path = "generated/default"
 includes = ["functions.toml"]

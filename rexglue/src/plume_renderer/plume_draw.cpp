@@ -2519,8 +2519,14 @@ bool PlumeDrawContext::Initialize(plume::RenderDevice* device) {
   // BC (DXT) textures, which the title keeps most of its own in: desktop GPUs
   // and Adreno take them, Mali and others do not.
   {
-    const auto probe = device_->createTexture(
-        plume::RenderTextureDesc::Texture2D(4, 4, 1, plume::RenderFormat::BC1_UNORM));
+    const std::string gpu_name = device_->getDescription().name;
+    const bool is_adreno = gpu_name.find("Adreno") != std::string::npos;
+    static const bool force_bc = std::getenv("XERENGE_FORCE_BC") != nullptr;
+    std::shared_ptr<plume::RenderTexture> probe;
+    if (device_->getCapabilities().textureCompressionBC || is_adreno || force_bc) {
+      probe = device_->createTexture(
+          plume::RenderTextureDesc::Texture2D(4, 4, 1, plume::RenderFormat::BC1_UNORM));
+    }
     // The feature, or a texture that could be made on a GPU known to sample it
     // right. Qualcomm's driver reports no textureCompressionBC on any Adreno, yet
     // 6xx and later sample BC correctly - asked by the feature alone, a Snapdragon
@@ -2529,13 +2535,9 @@ bool PlumeDrawContext::Initialize(plume::RenderDevice* device) {
     // the rank badges, the screen frame and most of the 3D came out as black and
     // grey slabs on a Redmi Note 7, all fine as ETC2. XERENGE_NO_BC=1 takes the
     // ETC2 path on any GPU, for comparing.
-    const std::string gpu_name = device_->getDescription().name;
     const bool bc_known_broken = gpu_name.find("Adreno (TM) 5") != std::string::npos;
     const bool no_bc_feature =
         !device_->getCapabilities().textureCompressionBC && bc_known_broken;
-    // XERENGE_FORCE_BC=1 keeps BC there all the same: a RenderDoc capture
-    // taken there with ETC2 does not replay on a desktop GPU, which has no ETC2.
-    static const bool force_bc = std::getenv("XERENGE_FORCE_BC") != nullptr;
     bc_supported_ = probe && VulkanTextureOk(probe.get()) && (!no_bc_feature || force_bc) &&
                     std::getenv("XERENGE_NO_BC") == nullptr;
     if (!bc_supported_) {
@@ -9024,7 +9026,8 @@ void PlumeDrawContext::EncodeDraws(plume::RenderCommandList* list,
 }
 
 
-#if defined(__ANDROID__) || defined(__linux__)
+#if defined(__ANDROID__) || defined(__linux__) || defined(__APPLE__)
+#include <zlib.h>
 // The disc's DXT textures re-encoded as ETC2 ahead of the game, into the ETC2
 // cache, for a GPU without BC (the installer's "Textures as ETC2"): nothing is
 // re-encoded while the game runs.

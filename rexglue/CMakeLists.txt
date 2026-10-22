@@ -3,7 +3,15 @@
 # SDK boilerplate lives in generated/rexglue.cmake.
 
 cmake_minimum_required(VERSION 3.25)
-project(burnout LANGUAGES CXX)
+if(APPLE)
+    project(burnout LANGUAGES C CXX OBJC OBJCXX)
+    set(CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "FXFS9ZVA8Z")
+    set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic")
+    set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO")
+    set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO")
+else()
+    project(burnout LANGUAGES CXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,7 +48,22 @@ elseif(ANDROID)
     # same APK; the app loads the one for the extracted disc.
     set(BURNOUT_ANDROID_LIBRARY main_eu CACHE STRING "The game's library name, without lib and .so")
     add_library(burnout SHARED ${BURNOUT_SOURCES} src/android_touch.cpp src/android_vibration.cpp)
-    set_target_properties(burnout PROPERTIES OUTPUT_NAME ${BURNOUT_ANDROID_LIBRARY})
+elseif(IOS)
+    add_executable(burnout MACOSX_BUNDLE ${BURNOUT_SOURCES})
+    set_target_properties(burnout PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/../ios/Xcode/Info.plist"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.xerenge.burnout"
+        MACOSX_BUNDLE_BUNDLE_NAME "Burnout Revenge"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.xerenge.burnout"
+        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "FXFS9ZVA8Z"
+        XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
+        XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "YES"
+        XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "YES"
+        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+    )
 else()
     add_executable(burnout ${BURNOUT_SOURCES})
 endif()
@@ -137,34 +160,37 @@ add_executable(shader_source_info_gen
     src/plume_renderer/shader_source_info.cpp
 )
 target_include_directories(shader_source_info_gen PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-file(GLOB XERENGE_TRANSLATED_HLSL CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/generated/xenos-hlsl/*.hlsl")
-set(XERENGE_SHADER_SOURCE_INFO_CPP "${CMAKE_CURRENT_BINARY_DIR}/shader_source_info_table.cpp")
-# It runs during the build, so a cross build without an emulator (Android)
-# needs it for the build machine: compiled there by the host's own compiler.
-set(XERENGE_SHADER_SOURCE_INFO_GEN shader_source_info_gen)
-if(CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR)
-    find_program(XERENGE_HOST_CXX NAMES c++ clang++ g++ NO_CMAKE_FIND_ROOT_PATH REQUIRED)
-    set(XERENGE_SHADER_SOURCE_INFO_GEN "${CMAKE_CURRENT_BINARY_DIR}/host/shader_source_info_gen")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/shader_source_info_table.cpp")
+    set(XERENGE_SHADER_SOURCE_INFO_CPP "${CMAKE_CURRENT_SOURCE_DIR}/generated/shader_source_info_table.cpp")
+else()
+    set(XERENGE_SHADER_SOURCE_INFO_CPP "${CMAKE_CURRENT_BINARY_DIR}/shader_source_info_table.cpp")
+    # It runs during the build, so a cross build without an emulator (Android)
+    # needs it for the build machine: compiled there by the host's own compiler.
+    set(XERENGE_SHADER_SOURCE_INFO_GEN shader_source_info_gen)
+    if(CMAKE_CROSSCOMPILING AND NOT CMAKE_CROSSCOMPILING_EMULATOR)
+        find_program(XERENGE_HOST_CXX NAMES c++ clang++ g++ NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+        set(XERENGE_SHADER_SOURCE_INFO_GEN "${CMAKE_CURRENT_BINARY_DIR}/host/shader_source_info_gen")
+        add_custom_command(
+            OUTPUT "${XERENGE_SHADER_SOURCE_INFO_GEN}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/host"
+            COMMAND "${XERENGE_HOST_CXX}" -std=c++20 -O2 -I "${CMAKE_CURRENT_SOURCE_DIR}/src"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/shader_source_info_gen.cpp"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/src/plume_renderer/shader_source_info.cpp"
+                    -o "${XERENGE_SHADER_SOURCE_INFO_GEN}"
+            COMMAND codesign -f -s - "${XERENGE_SHADER_SOURCE_INFO_GEN}"
+            DEPENDS tools/shader_source_info_gen.cpp src/plume_renderer/shader_source_info.cpp
+                    src/plume_renderer/shader_source_info.h
+            COMMENT "Building shader_source_info_gen for the build machine"
+            VERBATIM)
+    endif()
     add_custom_command(
-        OUTPUT "${XERENGE_SHADER_SOURCE_INFO_GEN}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/host"
-        COMMAND "${XERENGE_HOST_CXX}" -std=c++20 -O2 -I "${CMAKE_CURRENT_SOURCE_DIR}/src"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tools/shader_source_info_gen.cpp"
-                "${CMAKE_CURRENT_SOURCE_DIR}/src/plume_renderer/shader_source_info.cpp"
-                -o "${XERENGE_SHADER_SOURCE_INFO_GEN}"
-        DEPENDS tools/shader_source_info_gen.cpp src/plume_renderer/shader_source_info.cpp
-                src/plume_renderer/shader_source_info.h
-        COMMENT "Building shader_source_info_gen for the build machine"
+        OUTPUT "${XERENGE_SHADER_SOURCE_INFO_CPP}"
+        COMMAND ${XERENGE_SHADER_SOURCE_INFO_GEN} "${CMAKE_CURRENT_SOURCE_DIR}/generated/xenos-hlsl"
+                "${XERENGE_SHADER_SOURCE_INFO_CPP}"
+        DEPENDS ${XERENGE_SHADER_SOURCE_INFO_GEN} ${XERENGE_TRANSLATED_HLSL}
+        COMMENT "Reading the translated shaders into shader_source_info_table.cpp"
         VERBATIM)
 endif()
-add_custom_command(
-    OUTPUT "${XERENGE_SHADER_SOURCE_INFO_CPP}"
-    COMMAND ${XERENGE_SHADER_SOURCE_INFO_GEN} "${CMAKE_CURRENT_SOURCE_DIR}/generated/xenos-hlsl"
-            "${XERENGE_SHADER_SOURCE_INFO_CPP}"
-    DEPENDS ${XERENGE_SHADER_SOURCE_INFO_GEN} ${XERENGE_TRANSLATED_HLSL}
-    COMMENT "Reading the translated shaders into shader_source_info_table.cpp"
-    VERBATIM)
 list(APPEND REXGPU_PLUME_SOURCES "${XERENGE_SHADER_SOURCE_INFO_CPP}")
 if(XERENGE_SHADER_CACHE_CPP)
     if(NOT EXISTS "${XERENGE_SHADER_CACHE_CPP}")
@@ -241,7 +267,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
 endif()
 target_link_libraries(rexgpu-plume PRIVATE xerenge-etcpak)
 # zlib for the ETC2 preparation (xerenge_prepare_etc2): the installer's textures as ETC2.
-if(ANDROID OR (UNIX AND NOT APPLE))
+if(ANDROID OR UNIX)
     target_link_libraries(rexgpu-plume PRIVATE z)
 endif()
 if(ANDROID)

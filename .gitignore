@@ -64,3 +64,8 @@ rexglue/tools/make_runtime_shader_recipe
 .claw/sessions/
 .clawhip/
 rexglue/build-lobby/
+etc2_cache/
+ios/
+scratch/
+*.7z
+rexglue/tools/run_prepare_etc2

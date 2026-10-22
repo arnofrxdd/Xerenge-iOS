@@ -220,6 +220,9 @@ bool Etc2Cache::Find(uint64_t key, int* alpha, std::vector<uint8_t>* out, uint32
   }
   if (!entry && !dir.empty()) {
     entry = ReadFile(FileFor(dir, key));
+    if (!entry && dir.has_parent_path()) {
+      entry = ReadFile(FileFor(dir.parent_path(), key));
+    }
     if (entry) {
       std::lock_guard lock(s.mutex);
       Remember(s, key, entry);
