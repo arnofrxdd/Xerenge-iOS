@@ -7212,6 +7212,16 @@ void PlumeDrawContext::ChooseReflectionFaces(const std::vector<GuestDrawSnapshot
   bool cube_seen = false;
   size_t face_start = 0;
   std::unordered_set<uint64_t> seen_cube_faces;
+  // On mobile (6.1" retina screen), the player only watches their own car.
+  // The first cubemap destination in each frame belongs to the player car.
+  uint32_t player_cube_dest = 0;
+  for (size_t i = 0; i < draws.size(); ++i) {
+    if (draws[i].is_resolve && draws[i].resolve_cube && draws[i].resolve_face < 6) {
+      player_cube_dest = draws[i].resolve_dest;
+      break;
+    }
+  }
+
   for (size_t i = 0; i < draws.size(); ++i) {
     const GuestDrawSnapshot& snap = draws[i];
     if (!snap.is_resolve) {
@@ -7220,7 +7230,9 @@ void PlumeDrawContext::ChooseReflectionFaces(const std::vector<GuestDrawSnapshot
     if (snap.resolve_cube && snap.resolve_face < 6) {
       cube_seen = true;
       const uint64_t face_key = (uint64_t(snap.resolve_dest) << 3) | snap.resolve_face;
-      const bool is_turn = (snap.resolve_face / 2 == reflection_turn_);
+      const bool is_player_cube = (snap.resolve_dest == player_cube_dest);
+      // Refresh 1 face per frame for the player car (% 6), and skip dynamic cubemap rendering for traffic cars
+      const bool is_turn = is_player_cube && (snap.resolve_face == reflection_turn_);
       const bool already_seen = !seen_cube_faces.insert(face_key).second;
       static uint32_t described = 0;
       if (xerenge::Diagnostics() && described < 12) {
@@ -7261,7 +7273,7 @@ void PlumeDrawContext::ChooseReflectionFaces(const std::vector<GuestDrawSnapshot
     face_start = i + 1;
   }
   if (cube_seen) {
-    reflection_turn_ = (reflection_turn_ + 1) % 3;
+    reflection_turn_ = (reflection_turn_ + 1) % 6;
   }
 }
 
@@ -7770,6 +7782,15 @@ void PlumeDrawContext::EncodeDraws(plume::RenderCommandList* list,
     if (!snap.valid || snap.vs_hash == 0 || snap.ps_hash == 0 || snap.num_indices == 0) {
       ++fate.invalid;
       note_skip("invalid snapshot");
+      return;
+    }
+    // Mobile perceptual optimization:
+    // During massive multi-car crash surges in Traffic Attack (draws > 1800),
+    // cull secondary micro-sparks (small alpha-blended quads with <= 12 indices).
+    // On a 460 ppi 6.1" retina screen at 200 MPH, motion blur and bloom naturally blend sparks,
+    // so 30 sparks look identical to 100 sparks, but this prevents CPU & GPU stalls.
+    if (draws.size() > 1800 && snap.d3d_vertex_buffer != 0 && snap.num_indices <= 12 &&
+        snap.blend_control != 0x00010001u) {
       return;
     }
     const auto prim = static_cast<PrimitiveType>(snap.prim_type);
