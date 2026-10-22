@@ -480,13 +480,16 @@ constexpr uint32_t kSharedConstantBytes = 512;
 // six faces, filled half of that a frame (524288) and dropped the post-processing
 // and the interface again: a black 320x180 corner and no HUD, flickering. Twice
 // that on a desktop (640 MB of upload heap); a phone keeps the smaller one.
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(__APPLE__)
 constexpr uint32_t kDummyVertexCount = 1048576;
+constexpr uint32_t kCacheVertexCount = 524288;
+constexpr uint32_t kCbSlots = 8192;
 #else
 constexpr uint32_t kDummyVertexCount = 2097152;
+constexpr uint32_t kCacheVertexCount = 1048576;
+constexpr uint32_t kCbSlots = 16384;
 #endif
 constexpr uint32_t kVertsPerFrame = kDummyVertexCount / 2;
-constexpr uint32_t kCacheVertexCount = 1048576;
 constexpr uint32_t kInputLocationCount = 20;
 constexpr uint32_t kVertexStrideBytes = kInputLocationCount * 16;
 // Every location: the layout the staging buffer, the passthrough pipelines and
@@ -511,7 +514,6 @@ uint32_t TitleVertexLayout(uint64_t vs_hash) {
 
 // One slot per encoded draw. Kept in step with the overlay ring that feeds
 // this, so a frame the ring managed to hold is not then truncated here.
-constexpr uint32_t kCbSlots = 16384;
 // Each frame uses half of the vertex and constant buffers, alternating, so the
 // frame being written never shares a half with the one the GPU is drawing.
 constexpr uint32_t kSlotsPerFrame = kCbSlots / 2;
