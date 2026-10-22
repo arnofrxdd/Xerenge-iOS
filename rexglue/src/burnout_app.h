@@ -15,6 +15,8 @@
 #include <unistd.h>
 #endif
 
+void XerengeRegisterFrameClock();
+
 class BurnoutApp : public rex::ReXApp {
  public:
   using rex::ReXApp::ReXApp;
@@ -86,6 +88,7 @@ class BurnoutApp : public rex::ReXApp {
 
   void OnPostSetup() override {
     xerenge::plume_d3d::InstallPlumeRuntimeHooks();
+    XerengeRegisterFrameClock();
     // --online: this copy's lobby is up (and heard on the LAN) from the start,
     // not only once its own player signs in.
     xerenge::online::StartLobbyNetwork();

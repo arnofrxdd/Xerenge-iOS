@@ -281,8 +281,14 @@ PER_FRAME_HOOK(sub_822AE800)  // CB4SoundManager::Update
 
 // For the renderer (plume reads rex_frame_clock_provider): where the drawn state is
 // in logic steps and where the wall clock is, so frames drawn between two
-// steps can be drawn between the two states.
+#if defined(__APPLE__)
+// On Apple, rex_frame_clock_provider is defined in and exported by librexruntime.dylib.
+// Do not define a duplicate with '= nullptr' here, as that creates a separate shadowed copy
+// that gets dead-stripped by ld64 in the main executable.
+extern "C" RexFrameClockProviderFn rex_frame_clock_provider;
+#else
 extern "C" REX_HOST_EXPORT RexFrameClockProviderFn rex_frame_clock_provider = nullptr;
+#endif
 
 namespace {
 void CopyFrameClock(void* out, size_t size) {
@@ -296,6 +302,10 @@ const bool g_clock_registered = [] {
   return true;
 }();
 }  // namespace
+
+void XerengeRegisterFrameClock() {
+  rex_frame_clock_provider = &CopyFrameClock;
+}
 
 // The menu's anti-aliasing for the renderer (see FrameClock::menu_anti_aliasing).
 void XerengeSetMenuAntiAliasing(int32_t mode) {
