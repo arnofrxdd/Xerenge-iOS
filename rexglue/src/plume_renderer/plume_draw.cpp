@@ -7382,7 +7382,7 @@ void PlumeDrawContext::EncodeDraws(plume::RenderCommandList* list,
         // Not a pass over a copy: FillVertices converts its positions. And a
         // quarter of the half is kept for the draws given their room in order.
         bool finish = layout != 0;
-        if (finish && ReadsResolvedCopy(snap, false)) {
+        if (finish && ReadsResolvedCopy(snap, true)) {
           ++unfinished_[0];
           finish = false;
         }

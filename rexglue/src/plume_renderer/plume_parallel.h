@@ -118,7 +118,7 @@ class WorkerPool {
 
   void Loop() {
 #if defined(__APPLE__)
-    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
 #endif
     uint64_t seen = 0;
 #ifdef __linux__

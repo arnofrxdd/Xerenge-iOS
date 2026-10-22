@@ -19,6 +19,9 @@
 #endif
 
 #include <SDL3/SDL.h>
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
 #if defined(__ANDROID__)
 #include <sys/system_properties.h>
 #endif
@@ -928,6 +931,9 @@ void PlumeGraphicsSystem::StartPresentWorker() {
     return;
   }
   present_worker_ = std::thread([this] {
+#if defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
     for (;;) {
       uint32_t w = 0, h = 0;
       {
