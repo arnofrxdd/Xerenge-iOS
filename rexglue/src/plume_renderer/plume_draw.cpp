@@ -435,7 +435,9 @@ bool TranscodeBcToEtc2(rex::graphics::xenos::TextureFormat base_fmt,
   return true;
 }
 
-#if defined(__ANDROID__) || defined(__APPLE__)
+#if defined(__APPLE__)
+constexpr uint32_t kBindlessTextureCount = 512;
+#elif defined(__ANDROID__)
 constexpr uint32_t kBindlessTextureCount = 2048;
 #else
 constexpr uint32_t kBindlessTextureCount = 4096;
@@ -3470,9 +3472,15 @@ void PlumeDrawContext::TrimDrawSets() {
     last_report_ms.store(now, std::memory_order_relaxed);
     REXLOG_INFO("plume: draw descriptor sets: {} cached, {} made so far", draw_sets_.size(), draw_sets_made_);
   }
+#if defined(__APPLE__)
+  if (draw_sets_.size() <= 1024) {
+    return;
+  }
+#else
   if (draw_sets_.size() <= 6144) {
     return;
   }
+#endif
   std::erase_if(draw_sets_, [&](const auto& kv) { return kv.second.last_used + 3 < frame_serial_; });
 }
 

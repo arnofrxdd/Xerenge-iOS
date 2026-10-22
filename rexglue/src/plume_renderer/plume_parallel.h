@@ -4,10 +4,14 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdlib>
 #include <functional>
 #include <mutex>
 #include <thread>
 #include <vector>
+#if defined(__APPLE__)
+#include <pthread.h>
+#endif
 #ifdef __linux__
 #include <unistd.h>
 #endif
@@ -66,10 +70,22 @@ class WorkerPool {
 
  private:
   WorkerPool() {
-    const unsigned hardware = std::max(2u, std::thread::hardware_concurrency());
-    // Eight workers at most, and two cores left alone for the title's own
-    // threads and the driver.
-    const unsigned count = std::min(8u, hardware > 3 ? hardware - 3 : 1u);
+    unsigned count = 0;
+    if (const char* env = std::getenv("XERENGE_WORKERS")) {
+      count = static_cast<unsigned>(std::max(0, std::atoi(env)));
+    } else {
+#if defined(__APPLE__)
+      // On Apple Silicon mobile (2 P-cores + 4 E-cores), background workers
+      // cause massive thread contention and push physics threads to E-cores.
+      // Default to 0 (synchronous on the calling thread).
+      count = 0;
+#else
+      const unsigned hardware = std::max(2u, std::thread::hardware_concurrency());
+      // Eight workers at most, and two cores left alone for the title's own
+      // threads and the driver.
+      count = std::min(8u, hardware > 3 ? hardware - 3 : 1u);
+#endif
+    }
     for (unsigned i = 0; i < count; ++i) {
       workers_.emplace_back([this] { Loop(); });
     }
@@ -101,6 +117,9 @@ class WorkerPool {
   }
 
   void Loop() {
+#if defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
     uint64_t seen = 0;
 #ifdef __linux__
     {
