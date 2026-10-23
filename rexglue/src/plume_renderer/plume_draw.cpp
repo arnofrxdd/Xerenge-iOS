@@ -5828,6 +5828,7 @@ void PlumeDrawContext::ResolveRenderTarget(plume::RenderCommandList* list,
     REXLOG_INFO("plume: resolve target {:08X} -> {}x{} native (guest asked {}x{}, bindless {})",
                 dest_base, dest_width, dest_height, guest_width, guest_height, target.bindless);
   }
+  target.last_resolved_frame = frame_serial_;
   // Whatever was filtered down from the last copy is not this one.
   target.shrunk_current = false;
 
@@ -6412,10 +6413,22 @@ void PlumeDrawContext::BindGuestTextures(plume::RenderCommandList* list,
         const size_t mip_size = mip_src ? mips.size : 0;
         // Fast-path: if this texture is already uploaded and has a known content hash,
         // reuse it directly to eliminate redundant XXH3 hashing and mprotect overhead.
-        if (auto it = guest_textures_.find(key);
-            it != guest_textures_.end() && it->second && it->second->uploaded && it->second->content_hash != 0) {
-          frame_hashes.emplace(key, it->second->content_hash);
-          continue;
+        // Vertex fetch slots (slot >= 16, e.g. the 32 KB sky gradient) are allowed to
+        // check their content hash so dynamic sky/weather updates and map reloads are picked up.
+        if (slot < 16) {
+          if (auto it = guest_textures_.find(key);
+              it != guest_textures_.end() && it->second && it->second->uploaded && it->second->content_hash != 0) {
+            frame_hashes.emplace(key, it->second->content_hash);
+            continue;
+          }
+        } else {
+          // If this vertex-fetch texture was dormant for > 10 frames (across a menu or map reload),
+          // clear its content hash so it is guaranteed to untile and re-upload freshly into the GPU.
+          if (auto it = guest_textures_.find(key); it != guest_textures_.end() && it->second) {
+            if (it->second->last_used + 10 < frame_serial_) {
+              it->second->content_hash = 0;
+            }
+          }
         }
         if (page_writes_) {
           // Still watched since it was last hashed: the watch comes off a page
@@ -6977,7 +6990,7 @@ uint32_t PlumeDrawContext::BindlessForSlot(const GuestDrawSnapshot& snap, uint32
   // that is where the video frames arrive.)
   if (snap.d3d_vertex_buffer != 0) {
     if (auto it = resolved_targets_.find(fetch.base_address << 12);
-        it != resolved_targets_.end()) {
+        it != resolved_targets_.end() && frame_serial_ <= it->second.last_resolved_frame + 2) {
       return copy_bindless(it->second);
     }
   }
@@ -6988,7 +7001,7 @@ uint32_t PlumeDrawContext::BindlessForSlot(const GuestDrawSnapshot& snap, uint32
   // A texture fetch holds a page index while RB_COPY_DEST_BASE is a byte
   // address, hence the shift.
   if (auto it = resolved_targets_.find(fetch.base_address << 12);
-      it != resolved_targets_.end()) {
+      it != resolved_targets_.end() && frame_serial_ <= it->second.last_resolved_frame + 2) {
     return copy_bindless(it->second);
   }
   return 0;
@@ -7025,7 +7038,8 @@ void PlumeDrawContext::FillSharedConstants(uint8_t* dst, const GuestDrawSnapshot
     if (fetch.base_address != 0 &&
         fetch.dimension == rex::graphics::xenos::DataDimension::kCube) {
       if (auto it = resolved_targets_.find(fetch.base_address << 12);
-          it != resolved_targets_.end() && it->second.cube) {
+          it != resolved_targets_.end() && it->second.cube &&
+          frame_serial_ <= it->second.last_resolved_frame + 8) {
         words[32 + slot] = it->second.bindless;
       }
     }

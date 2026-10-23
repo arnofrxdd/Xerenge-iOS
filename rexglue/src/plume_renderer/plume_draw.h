@@ -617,6 +617,7 @@ class PlumeDrawContext {
     std::unique_ptr<plume::RenderTextureView> shrunk_view;
     uint32_t shrunk_bindless = 0;
     bool shrunk_current = false;
+    uint64_t last_resolved_frame = 0;
   };
   // Filters `target` down to its shrink size, after a copy into it.
   void ShrinkResolvedTarget(plume::RenderCommandList* list, ResolvedTarget& target);
